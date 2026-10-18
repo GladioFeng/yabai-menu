@@ -2,6 +2,8 @@
 
 ## 1.0.0 — release candidate
 
+- Build 24: use one single-line presentation and remove the redundant Detailed/Compact selector and two-line title renderer. Add Mint and Sky accent presets with system text and backdrop colors. Existing presentation preferences are ignored; other settings and theme overrides remain compatible.
+
 - Build 23: include the build number, process architecture, Accessibility permission, event subscription status and safe error categories in copied diagnostics. Reading diagnostics does not query yabai or request permission.
 
 - Build 22: report native subscription failures and recover with bounded retries; preserve an explicitly unfocused desktop even when Finder has visible windows; build Space context menus on demand from the latest snapshot.

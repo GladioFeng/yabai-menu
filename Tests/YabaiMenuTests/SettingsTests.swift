@@ -100,7 +100,6 @@ final class SettingsTests: XCTestCase {
         settings.visibleSpaceColor = "#00FF00"
         settings.inactiveSpaceColor = "#0000FF"
         settings.customWidth = 420
-        settings.presentation = .compact
         settings.showSpaceIcons = false
         settings.hideEmptySpaces = true
         settings.hideDuplicateApps = false
@@ -166,6 +165,46 @@ final class SettingsTests: XCTestCase {
         XCTAssertThrowsError(try AppSettings.checkedPath("echo"))
         XCTAssertThrowsError(try AppSettings.checkedPath("/tmp"))
         XCTAssertThrowsError(try AppSettings.checkedPath("/not/a/real/yabai"))
+    }
+
+    func testLegacyPresentationIsIgnoredWithoutChangingOtherPreferences() throws {
+        let name = "test.yabai-menu.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(12, forKey: "fontSize")
+        defaults.set("system", forKey: "colorPreset")
+        let expected = AppSettings(defaults: defaults)
+        for legacy in ["detailed", "compact"] {
+            defaults.set(legacy, forKey: "presentation")
+            let loaded = AppSettings(defaults: defaults)
+            XCTAssertEqual(loaded, expected)
+            loaded.save(to: defaults)
+            XCTAssertEqual(defaults.string(forKey: "presentation"), legacy)
+        }
+    }
+
+    func testFreshThemesFollowSystemColorsAndPreserveOverrides() throws {
+        let name = "test.yabai-menu.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        for preset in [ColorPreset.mint, .sky] {
+            var settings = AppSettings(defaults: defaults)
+            settings.colorPreset = preset
+            settings.focusedSpaceNameColor = ""
+            XCTAssertNil(preset.appearance)
+            XCTAssertEqual(preset.barBackground, .windowBackgroundColor)
+            XCTAssertEqual(settings.contentColor, .labelColor)
+            XCTAssertEqual(settings.spaceNameColor(focused: true, visible: true), .labelColor)
+            XCTAssertEqual(preset.colors.count, 7)
+            XCTAssertFalse(preset.colors[0].isEmpty)
+            XCTAssertTrue(preset.colors.allSatisfy { AppSettings.checkedColor($0) == $0 })
+            settings.focusedSpaceNameColor = "#123456"
+            settings.save(to: defaults)
+            let loaded = AppSettings(defaults: defaults)
+            XCTAssertEqual(loaded.colorPreset, preset)
+            XCTAssertEqual(loaded.focusedSpaceNameColor, "#123456")
+            XCTAssertNotEqual(loaded.spaceNameColor(focused: true, visible: true), .labelColor)
+        }
     }
 
     func testIndependentNameColorsAndLegacyMigration() throws {

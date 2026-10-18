@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // 代码目的：用原生按钮显示可独立点击的 Spaces 和 Process。
 // 代码逻辑：1. 生成窗口布局和分组；2. 按宽度保留焦点并裁减；3. 仅加载可见图标并分发点击。
-// 必需输入：快照、外观设置和动作回调。预期输出：支持两种密度和右键菜单的菜单栏视图。
+// 必需输入：快照、外观设置和动作回调。预期输出：支持宽度调整和右键菜单的单行菜单栏视图。
 import AppKit
 
 enum BarTarget: Equatable {
@@ -13,7 +13,6 @@ final class WidgetBarView: NSView {
     struct Cell: Equatable {
         var text: String
         var spaceName: String?
-        var detail = ""
         var symbol: String?
         var window: Window?
         var target: BarTarget
@@ -36,7 +35,7 @@ final class WidgetBarView: NSView {
                 && a.tooltip == b.tooltip && a.window?.focused == b.window?.focused
         }
         func hasSameDrawing(as other: Self) -> Bool {
-            text == other.text && detail == other.detail && symbol == other.symbol
+            text == other.text && symbol == other.symbol
                 && focus == other.focus && visible == other.visible && currentSpace == other.currentSpace
                 && opacity == other.opacity && window?.id == other.window?.id && window?.pid == other.window?.pid
         }
@@ -57,7 +56,6 @@ final class WidgetBarView: NSView {
         let size: NSSize
         let regularFont: NSFont
         let boldFont: NSFont
-        let smallFont: NSFont
     }
     private var renderedState: RenderState?
     private(set) var cells: [Cell] = []
@@ -111,8 +109,8 @@ final class WidgetBarView: NSView {
             if window.sticky { text += " ⌖" }
             if window.stackIndex != 0 { text += " \(window.stackIndex)" }
             let title = process && window.focused && settings.showWindowTitle && !settings.processOnlyIcon ? short(window.title, count: 20) : ""
-            if settings.presentation == .compact && !title.isEmpty { text += " " + title }
-            return Cell(text: text, detail: settings.presentation == .compact ? "" : title,
+            if !title.isEmpty { text += " " + title }
+            return Cell(text: text,
                         symbol: style == .icon ? layoutSymbol(window.layout) : nil, window: window,
                         target: .window(window.id, space?.id), group: group,
                         focus: space == nil ? window.focused : active, visible: space?.visible ?? false, display: space?.display ?? window.display, isProcess: process,
@@ -164,7 +162,7 @@ final class WidgetBarView: NSView {
         }
         let state = RenderState(cells: rows, settings: settings, omitted: omitted, height: height, enabled: enabled)
         guard state != renderedState else { return nil }
-        var regularFont = font(settings: settings, height: height), boldFont = font(settings: settings, height: height, bold: true), smallFont = font(settings: settings, height: height, small: true)
+        var regularFont = font(settings: settings, height: height), boldFont = font(settings: settings, height: height, bold: true)
         func measure(_ cell: Cell) -> CGFloat {
             let label: CGFloat
             if let name = cell.spaceName {
@@ -174,9 +172,7 @@ final class WidgetBarView: NSView {
             } else {
                 label = (cell.text as NSString).size(withAttributes: [.font: cell.focus || cell.currentSpace ? boldFont : regularFont]).width
             }
-            let text = max(label,
-                           (cell.detail as NSString).size(withAttributes: [.font: smallFont]).width)
-            return ceil(text) + (cell.window == nil ? 0 : iconSize) + (cell.symbol == nil ? 0 : layoutSize + 1) + (cell.window == nil ? 6 : 2)
+            return ceil(label) + (cell.window == nil ? 0 : iconSize) + (cell.symbol == nil ? 0 : layoutSize + 1) + (cell.window == nil ? 6 : 2)
         }
         func overflow() -> Cell {
             var cell = Cell(text: "+\(omitted)", target: .menu, group: "overflow", tooltip: "\(omitted) additional items · Open the full menu")
@@ -206,8 +202,8 @@ final class WidgetBarView: NSView {
                 rows.remove(at: index); omitted += 1
             } else if let index = rows.firstIndex(where: { $0.group == "layout" }) {
                 rows.remove(at: index)
-            } else if let index = rows.firstIndex(where: { $0.window != nil && (!$0.text.isEmpty || !$0.detail.isEmpty) }) {
-                rows[index].text = ""; rows[index].detail = ""; rows[index].width = measure(rows[index])
+            } else if let index = rows.firstIndex(where: { $0.window != nil && !$0.text.isEmpty }) {
+                rows[index].text = ""; rows[index].width = measure(rows[index])
             } else if let index = rows.firstIndex(where: { cell in
                 guard case .space(let id) = cell.target, let space = snapshot.spaces.first(where: { $0.id == id }) else { return false }
                 let short = cell.currentSpace && settings.focusStyle == .brackets ? "[\(space.index)]" : String(space.index)
@@ -237,7 +233,6 @@ final class WidgetBarView: NSView {
             let maximum = max(8, regularFont.pointSize - 1)
             regularFont = font(settings: settings, height: height, maximumSize: maximum)
             boldFont = font(settings: settings, height: height, bold: true, maximumSize: maximum)
-            smallFont = font(settings: settings, height: height, small: true, maximumSize: maximum)
             for index in rows.indices { rows[index].width = measure(rows[index]) }
         }
         while total(rows) > settings.width {
@@ -270,7 +265,7 @@ final class WidgetBarView: NSView {
             }
         }
         return Layout(state: state, cells: rows, frames: frames, backgrounds: backgrounds, separators: separators,
-                      size: NSSize(width: x + 2, height: height), regularFont: regularFont, boldFont: boldFont, smallFont: smallFont)
+                      size: NSSize(width: x + 2, height: height), regularFont: regularFont, boldFont: boldFont)
     }
 
     func apply(_ layout: Layout, icon: (Window) -> NSImage?) {
@@ -291,24 +286,15 @@ final class WidgetBarView: NSView {
         for (index, cell) in cells.enumerated() {
             let button = reuse ? buttons[index] : WidgetButton(frame: layout.frames[index])
             let previous = button.cellInfo
-            var textFont = cell.focus || cell.currentSpace ? layout.boldFont : layout.regularFont
-            var detailFont = layout.smallFont
-            if !cell.detail.isEmpty {
-                let totalHeight = textFont.ascender - textFont.descender + textFont.leading
-                    + detailFont.ascender - detailFont.descender + detailFont.leading
-                let scale = min(1, (height - 4) / totalHeight)
-                textFont = NSFontManager.shared.convert(textFont, toSize: textFont.pointSize * scale)
-                detailFont = NSFontManager.shared.convert(detailFont, toSize: detailFont.pointSize * scale)
-            }
+            let textFont = cell.focus || cell.currentSpace ? layout.boldFont : layout.regularFont
             let enabled = layout.state.enabled || cell.target == .menu
             let redraw = !reuse || appearanceChanged || previous?.hasSameDrawing(as: cell) != true
-                || button.frame != layout.frames[index] || button.textFont != textFont || button.detailFont != detailFont
+                || button.frame != layout.frames[index] || button.textFont != textFont
                 || button.isEnabled != enabled
             button.cellInfo = cell
             if redraw {
                 if button.frame != layout.frames[index] { button.frame = layout.frames[index] }
                 button.textFont = textFont
-                button.detailFont = detailFont
                 button.iconSize = min(CGFloat(settings.iconSize), height - 4)
                 button.layoutSize = min(CGFloat(settings.layoutIconSize), height - 4)
                 if !reuse || monochromeChanged || previous?.window?.pid != cell.window?.pid {
@@ -352,8 +338,8 @@ final class WidgetBarView: NSView {
         }
     }
 
-    private func font(settings: AppSettings, height: CGFloat, bold: Bool = false, small: Bool = false, maximumSize: CGFloat = .greatestFiniteMagnitude) -> NSFont {
-        let size = min(CGFloat(settings.fontSize) * (small ? 0.85 : 1), height - 6, maximumSize)
+    private func font(settings: AppSettings, height: CGFloat, bold: Bool = false, maximumSize: CGFloat = .greatestFiniteMagnitude) -> NSFont {
+        let size = min(CGFloat(settings.fontSize), height - 6, maximumSize)
         var base = NSFont(name: settings.fontName, size: size) ?? NSFont.systemFont(ofSize: size)
         let lineHeight = base.ascender - base.descender + base.leading
         if lineHeight > height - 4 { base = NSFontManager.shared.convert(base, toSize: size * (height - 4) / lineHeight) }
@@ -394,7 +380,6 @@ private final class WidgetButton: NSButton {
     var appIcon: NSImage?
     var stateIcon: NSImage?
     var textFont = NSFont.systemFont(ofSize: 11)
-    var detailFont = NSFont.systemFont(ofSize: 9)
     var textColor = NSColor.labelColor
     var symbolColor = NSColor.labelColor
     var iconSize: CGFloat = 16
@@ -424,17 +409,12 @@ private final class WidgetButton: NSButton {
         let color = (isEnabled ? textColor : .disabledControlTextColor).withAlphaComponent(opacity)
         let attributes: [NSAttributedString.Key: Any] = [.font: textFont, .paragraphStyle: paragraph, .foregroundColor: color]
         let lineHeight = textFont.ascender - textFont.descender + textFont.leading
-        let y = cell.detail.isEmpty ? (bounds.height - lineHeight) / 2 : bounds.height - lineHeight
+        let y = (bounds.height - lineHeight) / 2
         (cell.text as NSString).draw(in: NSRect(x: x, y: y, width: max(0, bounds.width - x - 1), height: lineHeight), withAttributes: attributes)
         if underline {
             let width = min((cell.text as NSString).size(withAttributes: [.font: textFont]).width, max(0, bounds.width - x - 1))
             color.setFill()
             NSBezierPath(roundedRect: NSRect(x: x, y: max(1, floor(y - 2)), width: width, height: 2), xRadius: 1, yRadius: 1).fill()
-        }
-        if !cell.detail.isEmpty {
-            let detailHeight = detailFont.ascender - detailFont.descender + detailFont.leading
-            (cell.detail as NSString).draw(in: NSRect(x: x, y: 0, width: max(0, bounds.width - x - 1), height: detailHeight),
-                withAttributes: [.font: detailFont, .paragraphStyle: paragraph, .foregroundColor: textColor.withAlphaComponent(opacity * 0.75)])
         }
     }
 

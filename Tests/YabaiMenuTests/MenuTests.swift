@@ -36,33 +36,31 @@ final class MenuTests: XCTestCase {
     }
 
     @MainActor
-    func testBothPresentationsRespectWidthKeepFocusAndLoadOnlyVisibleIcons() throws {
+    func testSingleLineRespectsWidthKeepsFocusAndLoadsOnlyVisibleIcons() throws {
         _ = NSApplication.shared
         for count in [10, 100, 500] {
             let state = try snapshot((1...count).map { window($0, space: $0 == count ? 80 : 1, focus: $0 == count) },
                                      spaces: (1...80).map { space($0, focus: $0 == 80) })
-            for mode in AppSettings.Presentation.allCases {
-                for width in [120, 280, 1000] {
-                    for height in [CGFloat(24), 37] {
-                        var settings = AppSettings()
-                        settings.presentation = mode; settings.density = .custom; settings.customWidth = width
-                        settings.iconSize = 32; settings.layoutIconSize = 32; settings.fontSize = 24
-                        settings.groupSpacing = 24; settings.spaceIconGap = 16
-                        let bar = WidgetBarView()
-                        var requested: [Int] = []
-                        let start = ProcessInfo.processInfo.systemUptime
-                        bar.configure(state, settings: settings, height: height) { requested.append($0.id); return nil }
-                        XCTAssertLessThanOrEqual(bar.frame.width, Double(width))
-                        XCTAssertTrue(bar.cells.contains { $0.target == .space(90) })
-                        XCTAssertTrue(bar.cells.contains { $0.window?.id == count })
-                        XCTAssertTrue(bar.cells.contains { $0.target == .create(90) })
-                        XCTAssertEqual(requested.count, bar.cells.filter { $0.window != nil }.count)
-                        XCTAssertEqual(requested.count, Set(requested).count)
-                        XCTAssertFalse(bar.cells.contains { $0.text.contains("⌄") || $0.text.contains("•") })
-                        XCTAssertTrue(bar.cells.contains { $0.group == "overflow" })
-                        for pair in zip(bar.subviews, bar.subviews.dropFirst()) { XCTAssertLessThanOrEqual(pair.0.frame.maxX, pair.1.frame.minX) }
-                        print("BAR_BENCH mode=\(mode) windows=\(count) width=\(width) height=\(height) elapsed_ms=\((ProcessInfo.processInfo.systemUptime-start)*1000) icon_calls=\(requested.count)")
-                    }
+            for width in [120, 280, 1000] {
+                for height in [CGFloat(24), 37] {
+                    var settings = AppSettings()
+                    settings.density = .custom; settings.customWidth = width
+                    settings.iconSize = 32; settings.layoutIconSize = 32; settings.fontSize = 24
+                    settings.groupSpacing = 24; settings.spaceIconGap = 16
+                    let bar = WidgetBarView()
+                    var requested: [Int] = []
+                    let start = ProcessInfo.processInfo.systemUptime
+                    bar.configure(state, settings: settings, height: height) { requested.append($0.id); return nil }
+                    XCTAssertLessThanOrEqual(bar.frame.width, Double(width))
+                    XCTAssertTrue(bar.cells.contains { $0.target == .space(90) })
+                    XCTAssertTrue(bar.cells.contains { $0.window?.id == count })
+                    XCTAssertTrue(bar.cells.contains { $0.target == .create(90) })
+                    XCTAssertEqual(requested.count, bar.cells.filter { $0.window != nil }.count)
+                    XCTAssertEqual(requested.count, Set(requested).count)
+                    XCTAssertFalse(bar.cells.contains { $0.text.contains("⌄") || $0.text.contains("•") })
+                    XCTAssertTrue(bar.cells.contains { $0.group == "overflow" })
+                    for pair in zip(bar.subviews, bar.subviews.dropFirst()) { XCTAssertLessThanOrEqual(pair.0.frame.maxX, pair.1.frame.minX) }
+                    print("BAR_BENCH windows=\(count) width=\(width) height=\(height) elapsed_ms=\((ProcessInfo.processInfo.systemUptime-start)*1000) icon_calls=\(requested.count)")
                 }
             }
         }
@@ -106,6 +104,27 @@ final class MenuTests: XCTestCase {
             bar.configure(try snapshot([], spaces: [space(3, focus: true)]), settings: settings) { _ in nil }
             XCTAssertFalse(bar.subviews.contains { view in buttons.contains { $0 === view } }, "Changed targets must not repurpose a tracked button")
         }
+    }
+
+    @MainActor
+    func testProcessTitleIsInlineAndRespectsVisibilitySettings() throws {
+        _ = NSApplication.shared
+        let state = try snapshot([window(1, focus: true)])
+        var settings = AppSettings()
+        settings.spaceScope = .hidden; settings.windowScope = .focused
+        settings.showLayout = false; settings.spaceLayout = .off
+        settings.density = .custom; settings.customWidth = 1000
+        let bar = WidgetBarView()
+        bar.configure(state, settings: settings) { _ in nil }
+        XCTAssertEqual(try XCTUnwrap(bar.cells.first { $0.isProcess }).text, "App 1 Window 1")
+        settings.showWindowTitle = false
+        bar.configure(state, settings: settings) { _ in nil }
+        let withoutTitle = try XCTUnwrap(bar.cells.first { $0.isProcess })
+        XCTAssertEqual(withoutTitle.text, "App 1")
+        XCTAssertTrue(withoutTitle.tooltip.contains("Window 1"))
+        settings.showWindowTitle = true; settings.processOnlyIcon = true
+        bar.configure(state, settings: settings) { _ in nil }
+        XCTAssertEqual(try XCTUnwrap(bar.cells.first { $0.isProcess }).text, "")
     }
 
     @MainActor
@@ -153,11 +172,11 @@ final class MenuTests: XCTestCase {
     }
 
     @MainActor
-    func testCompactClicksWindowLayoutsBrightnessAndFallbackMenu() throws {
+    func testSingleLineClicksWindowLayoutsBrightnessAndFallbackMenu() throws {
         _ = NSApplication.shared
         let state = try snapshot([window(1, focus: true, floating: true), window(2, stack: 2), window(3)])
         var settings = AppSettings()
-        settings.presentation = .compact; settings.density = .custom; settings.customWidth = 1000
+        settings.density = .custom; settings.customWidth = 1000
         settings.unfocusedBrightness = 20; settings.spaceIconGap = 0
         let controller = MenuBarController(settings: settings)
         controller.setupItem()
@@ -167,7 +186,6 @@ final class MenuTests: XCTestCase {
         XCTAssertFalse(bar.cells.contains( where: \.isProcess))
         XCTAssertEqual(bar.cells.compactMap { $0.window == nil ? nil : $0.symbol }, ["macwindow.on.rectangle", "square.stack.3d.up", "rectangle.split.2x2"])
         XCTAssertEqual(bar.cells.filter { $0.window != nil }.map(\.opacity), [1, 0.2, 0.2])
-        XCTAssertTrue(bar.cells.allSatisfy { $0.detail.isEmpty })
         let menuEvent = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
         var chosen: Int?
         controller.focusAction = { _, window in chosen = window }
@@ -578,7 +596,7 @@ final class MenuTests: XCTestCase {
     }
 
     @MainActor
-    func testDetailedWidthFocusAndVisibleIconLoading() throws {
+    func testProcessWidthFocusAndVisibleIconLoading() throws {
         guard ProcessInfo.processInfo.environment["YABAI_MENU_UI_TESTS"] == "1" else { throw XCTSkip("AppKit session required") }
         _ = NSApplication.shared
         let windows: [[String: Any]] = (1...500).map { id in
@@ -597,7 +615,7 @@ final class MenuTests: XCTestCase {
             var calls = 0
             let start = ProcessInfo.processInfo.systemUptime
             bar.configure(state, settings: settings) { _ in calls += 1; return image }
-            print("DETAILED_BENCH windows=500 spaces=50 width=\(width) elapsed_ms=\((ProcessInfo.processInfo.systemUptime-start)*1000) icon_calls=\(calls)")
+            print("PROCESS_BENCH windows=500 spaces=50 width=\(width) elapsed_ms=\((ProcessInfo.processInfo.systemUptime-start)*1000) icon_calls=\(calls)")
             XCTAssertLessThanOrEqual(bar.frame.width, Double(width))
             XCTAssertTrue(bar.cells.contains { $0.target == .space(60) })
             XCTAssertTrue(bar.cells.contains { $0.isProcess && $0.window?.id == 500 })
@@ -617,7 +635,7 @@ final class MenuTests: XCTestCase {
                     output.unlockFocus()
                     let png = try XCTUnwrap(NSBitmapImageRep(data: output.tiffRepresentation!))
                     try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
-                    try png.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("detailed-\(width)-\(name).png"))
+                    try png.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("process-\(width)-\(name).png"))
                 }
             }
             var selected: BarTarget?

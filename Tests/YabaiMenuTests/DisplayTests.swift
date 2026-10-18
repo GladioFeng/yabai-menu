@@ -619,7 +619,6 @@ final class DisplayTests: XCTestCase {
         defer { bars.close(); background.close(); defaults.removePersistentDomain(forName: suite) }
         var settings = AppSettings(defaults: defaults)
         settings.placement = .floating
-        settings.presentation = .compact
         settings.focusStyle = .underline
         settings.fontSize = 12
         settings.backgroundOpacity = 100

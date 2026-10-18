@@ -22,7 +22,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     var onEnableWindowObservation: (() -> Void)?
     private(set) var value: AppSettings
     let density = NSPopUpButton()
-    let presentation = NSPopUpButton()
     let placement = NSPopUpButton()
     let barBackdrop = NSPopUpButton()
     let colorPreset = NSPopUpButton()
@@ -99,8 +98,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         barBackdrop.selectItem(at: AppSettings.BarBackdrop.allCases.firstIndex(of: settings.barBackdrop)!)
         colorPreset.addItems(withTitles: ColorPreset.allCases.map(\.title))
         colorPreset.selectItem(at: ColorPreset.allCases.firstIndex(of: settings.colorPreset)!)
-        presentation.addItems(withTitles: ["Detailed · Spaces and Process", "Compact · text and icons"])
-        presentation.selectItem(at: AppSettings.Presentation.allCases.firstIndex(of: settings.presentation)!)
         for popup in [windowLayout, spaceLayout, spaceWindowLayout] { popup.addItems(withTitles: ["Text", "Icon", "Off"]) }
         windowLayout.selectItem(at: AppSettings.LayoutStyle.allCases.firstIndex(of: settings.layoutStyle)!)
         spaceLayout.selectItem(at: AppSettings.LayoutStyle.allCases.firstIndex(of: settings.spaceLayout)!)
@@ -111,7 +108,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         path.delegate = self
         path.target = self
         path.action = #selector(commitPath)
-        for popup in [density, scope, spaceName, focusStyle, windowScope, iconSize, presentation, placement, barBackdrop, colorPreset, windowLayout, spaceLayout, spaceWindowLayout] { popup.target = self; popup.action = #selector(displayChanged(_:)) }
+        for popup in [density, scope, spaceName, focusStyle, windowScope, iconSize, placement, barBackdrop, colorPreset, windowLayout, spaceLayout, spaceWindowLayout] { popup.target = self; popup.action = #selector(displayChanged(_:)) }
         layout.target = self; layout.action = #selector(displayChanged(_:))
         login.target = self; login.action = #selector(loginChanged)
         login.allowsMixedState = true
@@ -154,7 +151,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             return well
         }
         let grid = NSGridView(views: [
-            [label("Presentation"), presentation], [label("Menu width"), density],
+            [label("Menu width"), density],
             [label("Custom width"), widthControl], [label("App icon size"), iconSize],
             [label("Layout icon size"), number(\.layoutIconSize, values: Array(8...32), suffix: " pt")],
             [label("Space icon gap"), number(\.spaceIconGap, values: Array(0...16), suffix: " pt")],
@@ -194,7 +191,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         let processGrid = NSGridView(views: [
             [label("Window scope"), windowScope],
             [label("Focused app"), toggle("Show only its icon", \.processOnlyIcon)],
-            [label("Window title"), toggle("Show title below the app name", \.showWindowTitle)],
+            [label("Window title"), toggle("Show title beside the app name", \.showWindowTitle)],
             [label("Window state"), layout],
             [label("Window layout"), windowLayout], [label("Space layout"), spaceLayout]
         ])
@@ -337,7 +334,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         value.iconSize = iconSize.selectedItem?.tag ?? 16
         value.customWidth = min(1000, max(120, Int(width.doubleValue.rounded())))
         value.showLayout = layout.state == .on
-        value.presentation = AppSettings.Presentation.allCases[presentation.indexOfSelectedItem]
         value.layoutStyle = AppSettings.LayoutStyle.allCases[windowLayout.indexOfSelectedItem]
         value.spaceLayout = AppSettings.LayoutStyle.allCases[spaceLayout.indexOfSelectedItem]
         value.spaceWindowLayout = AppSettings.LayoutStyle.allCases[spaceWindowLayout.indexOfSelectedItem]

@@ -6,15 +6,15 @@ Spaces and window state in the native macOS menu bar or per-display bars. A smal
 - Click individual Spaces or windows directly. Right-click a Space to rename, move, create or delete it.
 - Show the focused app and optional title, independent Space/window layouts, sticky state and stack numbers.
 - Filter empty Spaces, duplicate apps, labels and titles; keep sticky apps in a separate group.
-- Customize detailed or compact presentation, width, fonts, icons, spacing, background, borders and corners.
+- Customize the single-line bar's width, fonts, icons, spacing, background, borders and corners.
 - Show only each display's Spaces, or show all displays with independent current-Space highlights. Dock bars at the top or drag floating bars to saved positions.
-- Choose Catppuccin or Tokyo Night colors, adjust Space names separately, and remove unfocused backgrounds.
+- Choose System, Mint, Sky, Catppuccin or Tokyo Night colors, adjust Space names separately, and remove unfocused backgrounds.
 - Recover from yabai restarts using socket and process events, with no periodic polling.
 - Open the full menu for all windows, connection status and privacy-conscious diagnostics.
 
 <img src="docs/assets/settings.png" alt="Yabai Menu appearance settings with example Spaces preview" width="640">
 
-The screenshot uses example data. Source is public; version 1.0.0 remains a release candidate. No GitHub Release or notarized binary has been published.
+The screenshot uses example data from the earlier settings layout; build 24 removes the Presentation selector. Source is public; version 1.0.0 remains a release candidate. No GitHub Release or notarized binary has been published.
 
 ## Requirements
 
@@ -49,7 +49,6 @@ Changes apply immediately and are saved locally. They do not query or reconnect 
 
 | Setting | Choices |
 | --- | --- |
-| Presentation | Detailed groups with optional two-line Process; compact single-line groups; both individually clickable |
 | Menu width | Compact 180 pt, standard 280 pt, custom 120–1000 pt |
 | Placement | Native menu bar, per-display top bar, or draggable per-display floating bar |
 | Spaces | All displays with independent current-Space highlights, this display only, or hidden; number, label, or both |
@@ -58,14 +57,16 @@ Changes apply immediately and are saved locally. They do not query or reconnect 
 | Process | Hidden by default; current Space, all Spaces, or focused window; focused app name, optional title, or icon only |
 | Layout | Independent Space and focused-window layout as text, icon, or hidden |
 | Style | 8–32 pt app/layout icons, 0–16 pt Space icon gaps, 0–24 pt group gaps, 0–64 pt display gaps, custom font and 8–24 pt text |
-| Colors | System, Catppuccin Mocha/Latte, Tokyo Night/Storm; separate background and Space-name colors |
+| Colors | System, Mint, Sky, Catppuccin Mocha/Latte, Tokyo Night/Storm; separate background and Space-name colors |
 | Group background | Separate focused/unfocused opacity (0% removes fill and border), 0–18 pt corners, borders, 0–100% unfocused-window brightness |
 | Floating | 24–64 pt content height, 20–100% window opacity, position lock, optional visibility above fullscreen apps |
 | Bar backdrop | Frosted glass, solid or none; 0–100% glass tint, 0–24 pt corners, side/vertical padding, subtle border and native shadow |
 
-Both presentations share the same controls. Icons and text fit the native menu-bar height; large text shrinks further when necessary to preserve clickable icons within a narrow width. Use System Colors restores automatic light/dark colors. Changes use the cached snapshot and do not reconnect yabai.
+The bar uses one single-line layout. Icons and text fit the native menu-bar height; large text shrinks further when necessary to preserve clickable icons within a narrow width. Use System Colors restores automatic light/dark colors.
 
 Selecting a different theme resets the six custom background/name overrides; opacity stays unchanged. Custom colors then override the selected theme. Existing linked name/background colors migrate without changing their appearance.
+
+Mint adds soft green Space backgrounds, and Sky adds soft blue backgrounds. Both keep system text and bar background colors for light and dark appearances. Existing `presentation` preferences are ignored; the width presets remain available.
 
 Top and floating bars default to a rounded glass backdrop with a subtle border and native window shadow. **Glass tint** changes only the background; **Window opacity** also fades text and icons. Solid stays opaque, and macOS Reduce Transparency uses a solid backdrop. Padding adds to content height. **None** removes the backdrop and its shadow. Latte uses its dark text color for all Space names; the current Space remains distinguished by its background and focus marker. The preview shows the backdrop and spacing; the window shadow is visible on the actual bar.
 
@@ -73,11 +74,11 @@ Space exclusions match the full app name or Space label; title exclusions match 
 
 ## Reading and using the menu bar
 
-The detailed view groups each Space's name and apps under one background. Every display's current Space gets the selected name marker (brackets, bold or underline), including when its background is transparent. A per-display bar accents its own current Space; the other displays' current Spaces retain the separate visible-Space color. The native all-displays menu bar uses global keyboard focus for its accent. Optional **Display divider** lines separate the remaining display groups and yield to current-Space labels at narrow widths. Window icon brightness follows the actual keyboard focus. Click a name to focus the Space, click an app icon to focus that window, or right-click the group for management actions. **Manage Spaces** in the full menu provides the same actions. In a per-display bar, Process and the `+` button follow that bar's display.
+The bar groups each Space's name and apps under one background. Every display's current Space gets the selected name marker (brackets, bold or underline), including when its background is transparent. A per-display bar accents its own current Space; the other displays' current Spaces retain the separate visible-Space color. The native all-displays menu bar uses global keyboard focus for its accent. Optional **Display divider** lines separate the remaining display groups and yield to current-Space labels at narrow widths. Window icon brightness follows the actual keyboard focus. Click a name to focus the Space, click an app icon to focus that window, or right-click the group for management actions. **Manage Spaces** in the full menu provides the same actions. In a per-display bar, Process and the `+` button follow that bar's display.
 
-Each Space app icon can show its own `float / stack / bsp` layout. Process is optional and hidden by default. When enabled, it shows the focused app above its optional window title in Detailed, or on one line in Compact. `float / stack / bsp` describes the focused window; a pin marker indicates sticky independently, and nonzero stack numbers stay visible. The separately labelled **Space** badge describes the current desktop's layout. Layout can also be shown with icons.
+Each Space app icon can show its own `float / stack / bsp` layout. Process is optional and hidden by default. When enabled, it shows the focused app beside its optional window title on one line. `float / stack / bsp` describes the focused window; a pin marker indicates sticky independently, and nonzero stack numbers stay visible. The separately labelled **Space** badge describes the current desktop's layout. Layout can also be shown with icons.
 
-Content fits the selected width. It retains the focused Space and any eligible focused window icon; `+N` opens the full menu for omitted entries. Only visible icons are requested and images are cached by process. Space groups and Process can both represent the same window. Both presentations support direct clicks and omit the fixed chevron. Right-click any item for **Open Full Menu**, **Settings…** and **Quit**; an empty bar shows a **Yabai** menu button.
+Content fits the selected width. It retains the focused Space and any eligible focused window icon; `+N` opens the full menu for omitted entries. Only visible icons are requested and images are cached by process. Space groups and Process can both represent the same window. Items support direct clicks without a fixed chevron. Right-click any item for **Open Full Menu**, **Settings…** and **Quit**; an empty bar shows a **Yabai** menu button.
 
 Space actions are serialized. Each action resolves a stable Space ID against a fresh query, including another check after display focus before deletion. Adjacent focus requests coalesce; mutations are not dropped or automatically retried. Separate yabai commands cannot form an atomic transaction with unrelated external commands. Permission and capability errors remain visible; the app does not change SIP or install a scripting addition.
 
@@ -143,7 +144,7 @@ env YABAI_MENU_UI_TESTS=1 YABAI_MENU_LIVE_PATH=/opt/homebrew/bin/yabai swift tes
 
 The live test temporarily registers only `yabai-menu-*` signals and checks cleanup. It does not switch real Spaces or windows. For build 23, [CI run 39091689744](https://github.com/GladioFeng/yabai-menu/actions/runs/39091689744) passed the noninteractive tests and universal builds on Intel and Apple Silicon macOS 15 runners.
 
-The reported label flicker was confirmed resolved in build 22 on Apple Silicon macOS 15.7.9. Build 23 still needs app installation and interactive acceptance. CI and isolated component measurements do not replace macOS 13 runtime checks, physical display lifecycle checks or end-to-end drag performance measurements.
+The reported label flicker was confirmed resolved in build 22 on Apple Silicon macOS 15.7.9. Build 24 still needs interactive acceptance on both architectures. CI and isolated component measurements do not replace macOS 13 runtime checks, physical display lifecycle checks or end-to-end drag performance measurements.
 
 See [RELEASING.md](RELEASING.md) for release checks and [CHANGELOG.md](CHANGELOG.md) for changes.
 
@@ -151,4 +152,4 @@ See [RELEASING.md](RELEASING.md) for release checks and [CHANGELOG.md](CHANGELOG
 
 GPL-3.0-only; see [LICENSE](LICENSE). The Space/window presentation is based on [a-bar](https://github.com/Jean-Tinland/a-bar). The native observer, refresh ordering, title/focus reconciliation and JSON compatibility code are adapted from the existing a-bar implementation, with model and lifecycle integration for this app. This app does not bundle a-bar assets. Window data and actions are supplied by yabai. Application icons are read from running applications; the app icon is generated from the paths in `scripts/make-icon.swift`.
 
-Theme RGB values come from [Catppuccin's palette](https://github.com/catppuccin/palette) (MIT) and [Tokyo Night](https://github.com/folke/tokyonight.nvim) (Apache-2.0). The floating-window behavior was compared with [Quosparr](https://github.com/Licoy/Quosparr); this app uses its own AppKit implementation and does not include Quosparr code or its Go runtime.
+Catppuccin and Tokyo Night RGB values come from [Catppuccin's palette](https://github.com/catppuccin/palette) (MIT) and [Tokyo Night](https://github.com/folke/tokyonight.nvim) (Apache-2.0). Mint and Sky use original accent colors with system text and backdrop colors. The floating-window behavior was compared with [Quosparr](https://github.com/Licoy/Quosparr); this app uses its own AppKit implementation and does not include Quosparr code or its Go runtime.

@@ -8,14 +8,12 @@ struct AppSettings: Equatable {
     }
     enum Placement: String, CaseIterable { case menuBar, docked, floating }
     enum BarBackdrop: String, CaseIterable { case glass, solid, none }
-    enum Presentation: String, CaseIterable { case detailed, compact }
     enum SpaceScope: String, CaseIterable { case all, focusedDisplay, hidden }
     enum SpaceName: String, CaseIterable { case number, label, numberAndLabel }
     enum FocusStyle: String, CaseIterable { case brackets, bold, underline }
     enum WindowScope: String, CaseIterable { case currentSpace, focused, hidden, all }
     enum LayoutStyle: String, CaseIterable { case text, icon, off }
     var density: Density = .standard
-    var presentation: Presentation = .detailed
     var placement: Placement = .menuBar
     var floatingHeight = 32
     var floatingOpacity = 100
@@ -85,7 +83,6 @@ struct AppSettings: Equatable {
         placement = Placement(rawValue: defaults.string(forKey: "placement") ?? "") ?? .menuBar
         barBackdrop = BarBackdrop(rawValue: defaults.string(forKey: "barBackdrop") ?? "") ?? .glass
         colorPreset = ColorPreset(rawValue: defaults.string(forKey: "colorPreset") ?? "") ?? .system
-        presentation = Presentation(rawValue: defaults.string(forKey: "presentation") ?? "") ?? .detailed
         spaceScope = SpaceScope(rawValue: defaults.string(forKey: "spaceScope") ?? "") ?? .all
         spaceName = SpaceName(rawValue: defaults.string(forKey: "spaceName") ?? "") ?? .number
         focusStyle = FocusStyle(rawValue: defaults.string(forKey: "focusStyle") ?? "") ?? .brackets
@@ -120,7 +117,6 @@ struct AppSettings: Equatable {
         defaults.set(barBackdrop.rawValue, forKey: "barBackdrop")
         defaults.set(colorPreset.rawValue, forKey: "colorPreset")
         defaults.set(density.rawValue, forKey: "displayDensity")
-        defaults.set(presentation.rawValue, forKey: "presentation")
         defaults.set(spaceScope.rawValue, forKey: "spaceScope")
         defaults.set(spaceName.rawValue, forKey: "spaceName")
         defaults.set(focusStyle.rawValue, forKey: "focusStyle")
