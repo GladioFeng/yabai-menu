@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 — local release candidate
+## 1.0.0 — release candidate
 
 - Build 23: include the build number, process architecture, Accessibility permission, event subscription status and safe error categories in copied diagnostics. Reading diagnostics does not query yabai or request permission.
 
@@ -62,7 +62,7 @@
 - Keep menu structure changes in AppKit's update callback. Validate uncommitted executable paths before checking the connection.
 - Stage and verify app/ZIP/checksum outputs before replacement; restore previous outputs if publication within `dist/` fails.
 
-This candidate uses ad-hoc signing. Public distribution, notarization, hosted CI and macOS 13 runtime verification remain pending.
+This candidate uses ad-hoc signing. Source is public, and hosted CI has passed on Intel and Apple Silicon. A GitHub Release, Developer ID signing, notarization and macOS 13 runtime verification remain pending.
 
 ## 0.2.0 — preview
 

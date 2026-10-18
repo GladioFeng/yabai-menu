@@ -14,11 +14,11 @@ Spaces and window state in the native macOS menu bar or per-display bars. A smal
 
 <img src="docs/assets/settings.png" alt="Yabai Menu appearance settings with example Spaces preview" width="640">
 
-The screenshot uses example data. Version 1.0.0 is a local release candidate; it has not been published or notarized.
+The screenshot uses example data. Source is public; version 1.0.0 remains a release candidate. No GitHub Release or notarized binary has been published.
 
 ## Requirements
 
-- macOS 13 or later is the build target. The 1.0 candidate is tested locally on Intel macOS 14.8.5. The candidate also launches on Apple Silicon macOS 15.7.9. macOS 13 runtime testing remains pending.
+- macOS 13 or later is the build target. The app has run locally on Intel macOS 14.8.5 and Apple Silicon macOS 15.7.9. macOS 13 runtime testing remains pending.
 - A running yabai installation. JSON compatibility has been checked against yabai 7.1.16 and 7.1.25.
 - Space and window actions use the capabilities and permissions of your existing yabai setup. See the [upstream setup guide](https://github.com/asmvik/yabai/wiki).
 
@@ -113,7 +113,7 @@ Use the same pattern for layout, sticky, and window-transfer scripts. Existing a
 
 Open the menu to see connection state and the last successful update time. The bar does not show exclamation badges. A failed query keeps the last valid snapshot; its unavailable state and details remain in the menu and Settings. An action error remains visible there until dismissed or another action is requested; a successful background read does not hide it.
 
-**Copy Diagnostics** includes the version and build, current process architecture, Accessibility permission, native subscription status, signal/notification readiness and error categories. It reads cached state without querying yabai or requesting permission. Window titles, Space labels and raw command errors are excluded.
+**Copy Diagnostics** includes the app version and build, current process architecture, macOS version, a home-relative executable path, connection state, update age, item counts, Accessibility permission and event monitoring status. It exports fixed error categories without application names, window titles, Space labels or raw command errors. Reading diagnostics does not query yabai or request permission. Review any extra logs or screenshots before attaching them to an issue.
 
 - **yabai not found:** install yabai or choose its executable in Settings.
 - **Disconnected:** check that yabai is running, then use **Check Connection**.
@@ -122,8 +122,6 @@ Open the menu to see connection state and the last successful update time. The b
 - **Display asleep:** the last snapshot is retained and queries resume on a wake event.
 - **A toggle did not update:** add the notification hook above, or use **Refresh**.
 - **No menu item:** reveal an automatically hidden menu bar and check whether other items have consumed its available space.
-
-**Copy Diagnostics** includes app/macOS versions, a home-relative executable path, connection state, update age, and item counts. It excludes window titles and application names. Review any extra logs or screenshots before attaching them to an issue.
 
 ## Development and tests
 
@@ -143,7 +141,9 @@ For the live integration check, first quit Yabai Menu. Choose the installed yaba
 env YABAI_MENU_UI_TESTS=1 YABAI_MENU_LIVE_PATH=/opt/homebrew/bin/yabai swift test
 ```
 
-The live test temporarily registers only `yabai-menu-*` signals and checks cleanup. It does not switch real Spaces or windows. The workflow is configured to run the noninteractive tests and universal build on Intel and Apple Silicon runners. Hosted CI has not run for this candidate.
+The live test temporarily registers only `yabai-menu-*` signals and checks cleanup. It does not switch real Spaces or windows. For build 23, [CI run 39091689744](https://github.com/GladioFeng/yabai-menu/actions/runs/39091689744) passed the noninteractive tests and universal builds on Intel and Apple Silicon macOS 15 runners.
+
+The reported label flicker was confirmed resolved in build 22 on Apple Silicon macOS 15.7.9. Build 23 still needs app installation and interactive acceptance. CI and isolated component measurements do not replace macOS 13 runtime checks, physical display lifecycle checks or end-to-end drag performance measurements.
 
 See [RELEASING.md](RELEASING.md) for release checks and [CHANGELOG.md](CHANGELOG.md) for changes.
 
