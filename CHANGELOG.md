@@ -2,6 +2,8 @@
 
 ## 1.0.0 — local release candidate
 
+- Build 23: include the build number, process architecture, Accessibility permission, event subscription status and safe error categories in copied diagnostics. Reading diagnostics does not query yabai or request permission.
+
 - Build 22: report native subscription failures and recover with bounded retries; preserve an explicitly unfocused desktop even when Finder has visible windows; build Space context menus on demand from the latest snapshot.
 
 - Build 21: confirm failed focused-window queries with a full snapshot before reporting a disconnect, so clicking the desktop does not briefly disable Space labels. Full-query failures still report errors.

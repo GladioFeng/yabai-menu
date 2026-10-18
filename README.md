@@ -113,6 +113,8 @@ Use the same pattern for layout, sticky, and window-transfer scripts. Existing a
 
 Open the menu to see connection state and the last successful update time. The bar does not show exclamation badges. A failed query keeps the last valid snapshot; its unavailable state and details remain in the menu and Settings. An action error remains visible there until dismissed or another action is requested; a successful background read does not hide it.
 
+**Copy Diagnostics** includes the version and build, current process architecture, Accessibility permission, native subscription status, signal/notification readiness and error categories. It reads cached state without querying yabai or requesting permission. Window titles, Space labels and raw command errors are excluded.
+
 - **yabai not found:** install yabai or choose its executable in Settings.
 - **Disconnected:** check that yabai is running, then use **Check Connection**.
 - **Event connection needs attention:** signal or notification setup failed. The app does not silently switch to polling. Use **Check Connection** to retry.

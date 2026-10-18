@@ -14,7 +14,7 @@
 set -eu
 cd "$(dirname "$0")"
 version=1.0.0
-build=22
+build=23
 if [ -z "${DEVELOPER_DIR:-}" ]; then
     DEVELOPER_DIR=$(/usr/bin/xcode-select -p)
     export DEVELOPER_DIR

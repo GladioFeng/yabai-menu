@@ -77,6 +77,7 @@ final class YabaiClient {
     private var monitorError: String?
     private var windowObservationError: String?
     private var subscriptionsFailed = false
+    private var subscriptionsConfirmed = false
     private var displaySleeping = false
 
     init(path: String, notification: String? = nil,
@@ -135,6 +136,7 @@ final class YabaiClient {
 
     func startWindowObservation() {
         observesWindows = true
+        subscriptionsConfirmed = false
         windowEvents?.start { [weak self] event in
             guard let self, !stopped, !displaySleeping else { return }
             switch event {
@@ -142,10 +144,12 @@ final class YabaiClient {
             case .titleChanged(let id, let pid, let element, let title): applyNativeTitle(id: id, pid: pid, element: element, title: title)
             case .resynchronized: refresh()
             case .permissionLost:
+                subscriptionsConfirmed = false
                 nativeTitles.removeAll()
                 refresh()
             case .subscriptionStatus(let complete):
                 let wasFailed = subscriptionsFailed
+                subscriptionsConfirmed = true
                 subscriptionsFailed = !complete
                 updateObservationStatus()
                 if complete { completeRecoveryIfHealthy() }
@@ -191,6 +195,7 @@ final class YabaiClient {
         refreshTask?.cancel(); refreshTask = nil
         pendingRefresh = nil
         hasFullSnapshot = false
+        subscriptionsConfirmed = false
         nativeTitles.removeAll()
     }
 
@@ -408,7 +413,11 @@ final class YabaiClient {
                     guard !stopped, !displaySleeping, current == generation, !Task.isCancelled else { return }
                     if scope == .full {
                         hasFullSnapshot = true
-                        if observesWindows { windowEvents?.update(next.windows); updateObservationStatus() }
+                        if observesWindows {
+                            subscriptionsConfirmed = false
+                            windowEvents?.update(next.windows)
+                            updateObservationStatus()
+                        }
                     }
                     snapshot = next
                     status.lastUpdated = Date()
@@ -585,6 +594,29 @@ final class YabaiClient {
 
     func dismissActionError() { status.actionError = nil; publish() }
     func reportActionError(_ message: String) { status.actionError = message; publish() }
+
+    var diagnosticLines: [String] {
+        let trusted = windowEvents?.isTrusted
+        let subscriptions: String
+        if stopped { subscriptions = "stopped" }
+        else if displaySleeping { subscriptions = "suspended" }
+        else if windowEvents == nil { subscriptions = "unavailable" }
+        else if !observesWindows { subscriptions = "not started" }
+        else if trusted != true { subscriptions = "permission required" }
+        else if !hasFullSnapshot || !subscriptionsConfirmed { subscriptions = "pending" }
+        else { subscriptions = subscriptionsFailed ? "failed" : "active" }
+
+        // 命令错误可能含窗口标题或凭据，诊断只导出固定类别。
+        let errors = [(queryError, "state query failed"), (eventError, "signal/notification setup failed"),
+                      (monitorError, "daemon monitor failed"), (windowObservationError, "native window observation unavailable"),
+                      (status.actionError, "Space/window action failed")].compactMap { $0.0 == nil ? nil : $0.1 }
+        return ["Accessibility: \(trusted.map { $0 ? "granted" : "denied" } ?? "unavailable")",
+                "Native window subscriptions: \(subscriptions)",
+                "Yabai signals: \(stopped ? "stopped" : (signalsReady ? "ready" : "not ready"))",
+                "Refresh notifications: \(notificationsReady ? "ready" : "not ready")",
+                "Daemon monitor: \(stopped ? "stopped" : (monitorError != nil ? "failed" : (daemonMonitor == nil ? "not started" : "active")))",
+                "Errors: \(errors.isEmpty ? "none" : errors.joined(separator: "; "))"]
+    }
 
     private func publish() {
         status.mode = displaySleeping ? .suspended : (queryError != nil ? .disconnected : (snapshot == nil ? .connecting : (signalsReady && notificationsReady && monitorError == nil && windowObservationError == nil ? .live : .limited)))

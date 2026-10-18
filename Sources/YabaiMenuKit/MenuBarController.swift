@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import AppKit
+import ApplicationServices
 
 @MainActor
 public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
@@ -501,10 +502,30 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    @objc private func copyDiagnostics() {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
+    func diagnostics(info: [String: Any]? = Bundle.main.infoDictionary) -> String {
+        let version = info?["CFBundleShortVersionString"] as? String ?? "development"
+        let build = info?["CFBundleVersion"] as? String ?? "unknown"
+        #if arch(arm64)
+        let architecture = "arm64"
+        #elseif arch(x86_64)
+        let architecture = "x86_64"
+        #else
+        let architecture = "unknown"
+        #endif
         let executable = (client?.path ?? "not found").replacingOccurrences(of: NSHomeDirectory(), with: "~")
-        let text = "Yabai Menu \(version)\nmacOS: \(ProcessInfo.processInfo.operatingSystemVersionString)\nyabai: \(executable)\nConnection: \(status.mode.rawValue)\n\(status.updatedDescription())\nSpaces: \(snapshot?.spaces.count ?? 0), windows: \(snapshot?.windows.count ?? 0)\nPeriodic polling: disabled\n"
+        let connection = client?.diagnosticLines ?? [
+            "Accessibility: \(AXIsProcessTrusted() ? "granted" : "denied")",
+            "Native window subscriptions: not started",
+            "Errors: \(status.message == nil ? "none" : "connection/action error; client unavailable")"]
+        return (["Yabai Menu \(version) (build \(build))", "Process architecture: \(architecture)",
+                 "macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)", "yabai: \(executable)",
+                 "Connection: \(status.mode.rawValue)", status.updatedDescription(),
+                 "Spaces: \(snapshot?.spaces.count ?? 0), windows: \(snapshot?.windows.count ?? 0)"]
+                + connection + ["Periodic polling: disabled"]).joined(separator: "\n") + "\n"
+    }
+
+    @objc private func copyDiagnostics() {
+        let text = diagnostics()
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
