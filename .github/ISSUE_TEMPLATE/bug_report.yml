@@ -1,0 +1,29 @@
+name: Bug report
+description: Report an incorrect state, failed action, or connection problem.
+body:
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: Include the expected result and the smallest steps that reproduce the issue.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Diagnostics
+      description: Paste the result of Copy Diagnostics. It does not include window titles. Review additional logs before sharing them.
+      render: text
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: yabai version
+      description: Run yabai --version.
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Mac architecture
+      options:
+        - Apple Silicon
+        - Intel
+        - Unknown

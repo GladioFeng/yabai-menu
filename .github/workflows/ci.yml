@@ -1,0 +1,35 @@
+name: Build and test
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Test without a live yabai or interactive desktop
+        run: |
+          set -o pipefail
+          mkdir -p .build
+          swift test 2>&1 | tee .build/tests.log
+      - name: Build universal app
+        run: sh build.sh
+      - name: Preserve build evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-${{ matrix.os }}
+          path: |
+            .build/tests.log
+            .build/build.log
+            dist/*.zip
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7

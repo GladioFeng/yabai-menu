@@ -1,0 +1,98 @@
+{
+  "version": "yabai-v7.1.16",
+  "spaces": [
+    {
+      "index": 1,
+      "display": 1,
+      "type": "bsp",
+      "has-focus": true,
+      "is-visible": true,
+      "id": 100,
+      "label": "Fixture Space 1"
+    },
+    {
+      "index": 2,
+      "display": 1,
+      "type": "bsp",
+      "has-focus": false,
+      "is-visible": false,
+      "id": 101,
+      "label": "Fixture Space 2"
+    },
+    {
+      "index": 3,
+      "display": 1,
+      "type": "bsp",
+      "has-focus": false,
+      "is-visible": false,
+      "id": 102,
+      "label": "Fixture Space 3"
+    }
+  ],
+  "windows": [
+    {
+      "space": 1,
+      "has-focus": true,
+      "is-floating": true,
+      "is-sticky": false,
+      "is-hidden": false,
+      "is-minimized": false,
+      "stack-index": 0,
+      "id": 1000,
+      "pid": 2000,
+      "app": "Fixture App 2",
+      "title": "Fixture Window 1",
+      "frame": {
+        "x": 0.0
+      }
+    },
+    {
+      "space": 1,
+      "has-focus": false,
+      "is-floating": false,
+      "is-sticky": false,
+      "is-hidden": false,
+      "is-minimized": false,
+      "stack-index": 0,
+      "id": 1001,
+      "pid": 2001,
+      "app": "Fixture App 4",
+      "title": "Fixture Window 2",
+      "frame": {
+        "x": 20.0
+      }
+    },
+    {
+      "space": 1,
+      "has-focus": false,
+      "is-floating": false,
+      "is-sticky": false,
+      "is-hidden": false,
+      "is-minimized": false,
+      "stack-index": 0,
+      "id": 1002,
+      "pid": 2002,
+      "app": "Fixture App 1",
+      "title": "Fixture Window 3",
+      "frame": {
+        "x": 40.0
+      }
+    },
+    {
+      "space": 1,
+      "has-focus": false,
+      "is-floating": true,
+      "is-sticky": false,
+      "is-hidden": false,
+      "is-minimized": true,
+      "stack-index": 0,
+      "id": 1003,
+      "pid": 2003,
+      "app": "Fixture App 3",
+      "title": "Fixture Window 4",
+      "frame": {
+        "x": 60.0
+      }
+    }
+  ]
+}
