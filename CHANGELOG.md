@@ -2,6 +2,8 @@
 
 ## 1.0.0 — release candidate
 
+- Build 26: vertically center visible Space labels with app icons, preserving focus underlines and clipping long labels to their buttons.
+
 - Build 25: omit explicitly invisible sticky windows from Space and sticky icon groups, including 1Password's ordered-out auxiliary window. Preserve real sticky windows, other-Space app icons and the Process recovery list.
 
 - Build 24: use one single-line presentation and remove the redundant Detailed/Compact selector and two-line title renderer. Add Mint and Sky accent presets with system text and backdrop colors. Existing presentation preferences are ignored; other settings and theme overrides remain compatible.

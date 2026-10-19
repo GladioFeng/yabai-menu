@@ -144,7 +144,7 @@ env YABAI_MENU_UI_TESTS=1 YABAI_MENU_LIVE_PATH=/opt/homebrew/bin/yabai swift tes
 
 The live test temporarily registers only `yabai-menu-*` signals and checks cleanup. It does not switch real Spaces or windows. For build 23, [CI run 39091689744](https://github.com/GladioFeng/yabai-menu/actions/runs/39091689744) passed the noninteractive tests and universal builds on Intel and Apple Silicon macOS 15 runners.
 
-The reported label flicker was confirmed resolved in build 22 on Apple Silicon macOS 15.7.9. Build 25 still needs interactive acceptance on both architectures. CI and isolated component measurements do not replace macOS 13 runtime checks, physical display lifecycle checks or end-to-end drag performance measurements.
+The reported label flicker was confirmed resolved in build 22 on Apple Silicon macOS 15.7.9. Build 26 still needs interactive acceptance on both architectures. CI and isolated component measurements do not replace macOS 13 runtime checks, physical display lifecycle checks or end-to-end drag performance measurements.
 
 See [RELEASING.md](RELEASING.md) for release checks and [CHANGELOG.md](CHANGELOG.md) for changes.
 

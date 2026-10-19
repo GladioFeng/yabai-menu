@@ -3,6 +3,7 @@
 // 代码逻辑：1. 生成窗口布局和分组；2. 按宽度保留焦点并裁减；3. 仅加载可见图标并分发点击。
 // 必需输入：快照、外观设置和动作回调。预期输出：支持宽度调整和右键菜单的单行菜单栏视图。
 import AppKit
+import CoreText
 
 enum BarTarget: Equatable {
     case space(Int), window(Int, Int?), create(Int), menu
@@ -404,17 +405,32 @@ private final class WidgetButton: NSButton {
             drawIcon(symbol, in: NSRect(x: x, y: (bounds.height - layoutSize) / 2, width: layoutSize, height: layoutSize), opacity: opacity)
             x += layoutSize + 1
         }
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineBreakMode = .byTruncatingTail
+        let availableWidth = max(0, bounds.width - x - 1)
+        guard !cell.text.isEmpty, availableWidth > 0, let context = NSGraphicsContext.current?.cgContext else { return }
         let color = (isEnabled ? textColor : .disabledControlTextColor).withAlphaComponent(opacity)
-        let attributes: [NSAttributedString.Key: Any] = [.font: textFont, .paragraphStyle: paragraph, .foregroundColor: color]
-        let lineHeight = textFont.ascender - textFont.descender + textFont.leading
-        let y = (bounds.height - lineHeight) / 2
-        (cell.text as NSString).draw(in: NSRect(x: x, y: y, width: max(0, bounds.width - x - 1), height: lineHeight), withAttributes: attributes)
+        let attributes: [NSAttributedString.Key: Any] = [.font: textFont, NSAttributedString.Key(kCTForegroundColorAttributeName as String): color.cgColor]
+        var line = CTLineCreateWithAttributedString(NSAttributedString(string: cell.text, attributes: attributes))
+        if CTLineGetTypographicBounds(line, nil, nil, nil) > availableWidth {
+            let ellipsis = CTLineCreateWithAttributedString(NSAttributedString(string: "…", attributes: attributes))
+            guard let truncated = CTLineCreateTruncatedLine(line, availableWidth, .end, ellipsis) else { return }
+            line = truncated
+        }
+        let imageBounds = CTLineGetImageBounds(line, nil)
+        let glyphBounds = imageBounds.isNull || imageBounds.isEmpty
+            ? CTLineGetBoundsWithOptions(line, .excludeTypographicLeading) : imageBounds
+        // Center visible glyphs like app icons, excluding font padding and the focus underline.
+        let baseline = bounds.midY - glyphBounds.midY
+        context.saveGState()
+        context.clip(to: NSRect(x: x, y: 0, width: availableWidth, height: bounds.height))
+        context.textMatrix = .identity
+        context.textPosition = NSPoint(x: x, y: baseline)
+        CTLineDraw(line, context)
+        context.restoreGState()
         if underline {
-            let width = min((cell.text as NSString).size(withAttributes: [.font: textFont]).width, max(0, bounds.width - x - 1))
+            let width = min(CTLineGetTypographicBounds(line, nil, nil, nil), availableWidth)
+            let y = max(1, floor(baseline + glyphBounds.minY - 4))
             color.setFill()
-            NSBezierPath(roundedRect: NSRect(x: x, y: max(1, floor(y - 2)), width: width, height: 2), xRadius: 1, yRadius: 1).fill()
+            NSBezierPath(roundedRect: NSRect(x: x, y: y, width: width, height: 2), xRadius: 1, yRadius: 1).fill()
         }
     }
 

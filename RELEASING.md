@@ -12,6 +12,6 @@ Version 1.0.0 remains a release candidate. Source is public, and [build 23 CI](h
 8. For broadly distributed binaries, use a valid Developer ID Application identity, hardened runtime, a secure timestamp and Apple notarization. The current ad-hoc build does not satisfy that distribution workflow. Review the notarization result and staple its ticket before publishing.
 9. Publish the reviewed source and versioned archive with release notes and a SHA-256 checksum. Test the downloaded archive's first launch and replacement of a previous version on another Mac.
 
-Remaining release checks include macOS 13 runtime testing, build 25 installation and interactive acceptance on both architectures, the outstanding physical checks above, license/source review, and the signed distribution workflow. Do not put signing secrets in this repository or diagnostics.
+Remaining release checks include macOS 13 runtime testing, build 26 installation and interactive acceptance on both architectures, the outstanding physical checks above, license/source review, and the signed distribution workflow. Do not put signing secrets in this repository or diagnostics.
 
 References: [Apple notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution), [GitHub runner architectures](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).

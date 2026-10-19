@@ -67,6 +67,87 @@ final class MenuTests: XCTestCase {
     }
 
     @MainActor
+    func testSpaceGlyphsAndAppIconsShareVerticalCenter() throws {
+        _ = NSApplication.shared
+        var settings = AppSettings()
+        settings.spaceScope = .all; settings.windowScope = .hidden
+        settings.spaceName = .label; settings.focusStyle = .bold
+        settings.showSpaceIcons = true; settings.showCreateSpace = false
+        settings.spaceWindowLayout = .off
+        settings.fontSize = 14; settings.iconSize = 18
+        settings.backgroundOpacity = 0; settings.unfocusedBackgroundOpacity = 0
+        settings.showBorder = false; settings.unfocusedBrightness = 100
+        settings.focusedSpaceNameColor = "#ff0000"
+        settings.visibleSpaceNameColor = "#ff0000"
+        settings.inactiveSpaceNameColor = "#ff0000"
+        let icon = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
+            NSColor.blue.setFill(); rect.fill(); return true
+        }
+        for height in [CGFloat(24), 37] {
+            for focused in [false, true] {
+                for label in ["1", "2", "3", "gyp", "中文", "🙂", "1🙂", "Longname gyp"] {
+                    var item = space(1, focus: focused); item["label"] = label
+                    let state = try snapshot([window(1)], spaces: [item])
+                    let bar = WidgetBarView()
+                    bar.configure(state, settings: settings, height: height) { _ in icon }
+                    func render() throws -> NSBitmapImageRep {
+                        if label == "Longname gyp" {
+                            bar.subviews[0].setFrameSize(NSSize(width: 24, height: height - 2))
+                        }
+                        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+                            pixelsWide: Int(bar.bounds.width * 2), pixelsHigh: Int(height * 2),
+                            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+                        bitmap.size = bar.bounds.size
+                        bar.cacheDisplay(in: bar.bounds, to: bitmap)
+                        return bitmap
+                    }
+                    let bitmap = try render()
+                    if let directory = ProcessInfo.processInfo.environment["YABAI_MENU_TEST_OUTPUT"] {
+                        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+                        try bitmap.representation(using: .png, properties: [:])?.write(to:
+                            URL(fileURLWithPath: directory).appendingPathComponent("alignment-\(Int(height))-\(focused)-\(label).png"))
+                    }
+                    var textRows: [Int] = [], iconRows: [Int] = []
+                    for y in 0..<bitmap.pixelsHigh {
+                        for x in 0..<bitmap.pixelsWide {
+                            let color = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                            guard color.alphaComponent > 0.2 else { continue }
+                            if CGFloat(x) < bar.subviews[1].frame.minX * 2 {
+                                XCTAssertLessThan(CGFloat(x), bar.subviews[0].frame.maxX * 2, "Text must stay inside its button")
+                                textRows.append(y)
+                            }
+                            else if color.blueComponent > 0.8 && color.redComponent < 0.2 { iconRows.append(y) }
+                        }
+                    }
+                    let textRange = try XCTUnwrap(textRows.min())...XCTUnwrap(textRows.max())
+                    let textCenter = Double(textRange.lowerBound + textRange.upperBound) / 2
+                    let iconCenter = Double(try XCTUnwrap(iconRows.min()) + XCTUnwrap(iconRows.max())) / 2
+                    XCTAssertEqual(textCenter, iconCenter, accuracy: 1,
+                                   "Visible glyphs must align with icons within one Retina pixel: \(label), height \(height), focused \(focused)")
+                    if focused {
+                        settings.focusStyle = .underline
+                        bar.configure(state, settings: settings, height: height) { _ in icon }
+                        let underlined = try render()
+                        var addedInk = 0
+                        for y in 0..<bitmap.pixelsHigh {
+                            for x in 0..<bitmap.pixelsWide {
+                                let before = try XCTUnwrap(bitmap.colorAt(x: x, y: y))
+                                let after = try XCTUnwrap(underlined.colorAt(x: x, y: y))
+                                if textRange.contains(y) {
+                                    XCTAssertEqual(before, after, "The underline must not move or overlap glyphs")
+                                } else if after.alphaComponent > before.alphaComponent + 0.2 { addedInk += 1 }
+                            }
+                        }
+                        XCTAssertGreaterThan(addedInk, 0, "The focus underline remains visible")
+                        settings.focusStyle = .bold
+                    }
+                }
+            }
+        }
+    }
+
+    @MainActor
     func testSpaceFocusPreparesWithoutPaintingAndReusesStableButtons() throws {
         _ = NSApplication.shared
         var settings = AppSettings()
