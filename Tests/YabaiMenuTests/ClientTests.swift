@@ -56,7 +56,9 @@ final class ClientTests: XCTestCase {
     }
 
     private func makeClient(_ fake: FakeYabai, register: YabaiClient.Register? = nil) -> YabaiClient {
-        YabaiClient(path: "/fake/yabai", notification: "test.yabai-menu.\(UUID().uuidString)", run: fake.run, register: register, windowEvents: YabaiWindowEvents(trusted: { false }, supportsTitles: true))
+        // Fake displays must not depend on whether the physical test host is asleep.
+        YabaiClient(path: "/fake/yabai", notification: "test.yabai-menu.\(UUID().uuidString)", run: fake.run, register: register,
+                    windowEvents: YabaiWindowEvents(trusted: { false }, supportsTitles: true), displaysAwake: { true })
     }
 
     private func waitUntil(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async {

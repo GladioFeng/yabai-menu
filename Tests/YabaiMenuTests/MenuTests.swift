@@ -554,6 +554,52 @@ final class MenuTests: XCTestCase {
         XCTAssertFalse(controller.widgetBar?.cells.contains( where: \.isProcess) == true)
         XCTAssertFalse(controller.widgetBar?.cells.contains { $0.tooltip.contains("sticky") } == true)
     }
+    @MainActor
+    func testZeroSizedStickyAuxiliaryWindowDoesNotCreateIcon() throws {
+        _ = NSApplication.shared
+        // Sanitized metadata from 1Password's invisible background window on macOS.
+        let auxiliary: [String: Any] = [
+            "id": 791, "pid": 741, "app": "1Password", "title": "", "space": 2, "display": 1,
+            "subrole": "AXStandardWindow", "has-focus": false, "is-visible": false,
+            "is-floating": true, "is-sticky": true, "is-hidden": false, "is-minimized": false,
+            "stack-index": 0, "frame": ["x": 0, "y": 0, "w": 0, "h": 0]
+        ]
+        var settings = AppSettings()
+        settings.spaceScope = .all; settings.windowScope = .hidden
+        let bar = WidgetBarView()
+        var realWindow = auxiliary
+        realWindow["id"] = 792; realWindow["is-visible"] = true
+        realWindow["frame"] = ["x": 100, "y": 100, "w": 500, "h": 400]
+        for separate in [true, false] {
+            settings.separateSticky = separate
+            bar.configure(try snapshot([auxiliary]), settings: settings) { _ in nil }
+            XCTAssertFalse(bar.cells.contains { $0.window?.id == 791 },
+                           "An invisible auxiliary window must not create an icon in either group")
+            bar.configure(try snapshot([auxiliary, realWindow]), settings: settings) { _ in nil }
+            XCTAssertEqual(bar.cells.compactMap { $0.window?.id }, [792],
+                           "The same app's real sticky window must remain available after deduplication")
+        }
+        settings.windowScope = .all
+        XCTAssertEqual(WidgetContent(snapshot: try snapshot([auxiliary]), settings: settings).process.map(\.id), [791],
+                       "The all-window recovery view retains accepted windows independently of Space icons")
+    }
+
+    func testStickyVisibilityPreservesOtherSpaceIconsAndWindowRecovery() throws {
+        let legacySticky = window(1, sticky: true)
+        var otherSpace = window(2, space: 2); otherSpace["is-visible"] = false
+        var hidden = window(3, sticky: true, hidden: true); hidden["is-visible"] = false
+        var minimized = window(4, sticky: true, minimized: true); minimized["is-visible"] = false
+        let state = try snapshot([legacySticky, otherSpace, hidden, minimized])
+        var settings = AppSettings()
+        settings.spaceScope = .all; settings.windowScope = .all; settings.separateSticky = true
+        let content = WidgetContent(snapshot: state, settings: settings)
+        XCTAssertEqual(content.sticky.map(\.id), [1], "An omitted visibility field remains compatible")
+        XCTAssertEqual(content.groups.flatMap { $0.windows.map(\.id) }, [2],
+                       "Non-sticky windows on another Space must keep their app icons")
+        XCTAssertEqual(Set(content.process.map(\.id)), Set([1, 2, 3, 4]),
+                       "Hidden and minimized windows remain available for recovery")
+    }
+
     func testWidgetFilteringAndProcessSemantics() throws {
         var duplicate = window(2)
         duplicate["app"] = "App 1"

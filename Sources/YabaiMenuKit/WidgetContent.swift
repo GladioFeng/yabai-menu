@@ -39,7 +39,8 @@ struct WidgetContent {
             return settings.spaceScope != .focusedDisplay || localDisplay == nil || owner == localDisplay
         }
         let accepted = snapshot.windows.filter { ($0.subrole == nil || ($0.subrole != "" && $0.subrole != "AXDialog")) && onSelectedDisplay($0) }
-        let visible = accepted.filter { !$0.hidden && !$0.minimized }
+        // Sticky helpers can remain registered after being ordered out.
+        let visible = accepted.filter { !$0.hidden && !$0.minimized && (!$0.sticky || $0.visible != false) }
         let grouped = Dictionary(grouping: visible, by: \.space)
         groups = snapshot.spaces.compactMap { space in
             guard settings.spaceScope != .hidden,
