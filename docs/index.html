@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f6f2">
+  <title>Yabai Menu — Keep your Spaces in sight</title>
+  <meta name="description" content="Native macOS controls for yabai Spaces and windows. Choose a menu bar, top bar, or floating bar, with per-display layouts and custom themes.">
+  <meta property="og:title" content="Yabai Menu — Keep your Spaces in sight">
+  <meta property="og:description" content="Spaces, window controls, and app icons in a native macOS bar. An open-source companion for yabai.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://gladiofeng.github.io/yabai-menu/">
+  <meta property="og:image" content="https://gladiofeng.github.io/yabai-menu/assets/app-icon.png">
+  <link rel="canonical" href="https://gladiofeng.github.io/yabai-menu/">
+  <link rel="icon" type="image/png" href="assets/app-icon.png">
+  <link rel="stylesheet" href="style.css">
+  <script src="site.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header wrap">
+    <a class="brand" href="#" aria-label="Yabai Menu home"><img src="assets/app-icon.png" width="38" height="38" alt=""><span>Yabai Menu</span></a>
+    <nav aria-label="Main navigation">
+      <a class="nav-detail" href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a class="github-link" href="https://github.com/GladioFeng/yabai-menu">GitHub <span aria-hidden="true">↗</span></a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> A native macOS companion for yabai</p>
+        <h1 id="hero-title">Keep your<br>Spaces <span>in sight.</span></h1>
+        <p class="hero-description">See each desktop, switch windows, and read their state from a native macOS bar. Put it in the menu bar or give each display a bar of its own.</p>
+        <div class="hero-actions">
+          <a class="button button-dark" href="https://github.com/GladioFeng/yabai-menu/releases/download/v1.0.0-rc.29/Yabai-Menu-1.0.0-universal.zip"><span aria-hidden="true">↓</span> Download for macOS</a>
+          <a class="text-link" href="https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.29">Release notes <span aria-hidden="true">↗</span></a>
+        </div>
+        <p class="download-meta">1.0.0 RC · build 29 <span>Intel + Apple Silicon</span></p>
+        <p class="signing-note">Ad-hoc signed, not notarized. <a href="#install">Read the installation notes.</a></p>
+      </div>
+      <div class="hero-aside" aria-hidden="true">
+        <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+        <img src="assets/app-icon.png" width="176" height="176" alt="">
+        <span class="aside-label">A small bar.<br>A view of your workspace.</span>
+      </div>
+    </section>
+
+    <section class="preview-section wrap" aria-labelledby="preview-title">
+      <div class="section-caption"><h2 id="preview-title">One workspace. Three places for the bar.</h2><span>Try the layout preview <span aria-hidden="true">↙</span></span></div>
+      <div id="preview" class="desktop" data-placement="top" data-theme="mint" data-space="1">
+        <div class="desktop-menubar" aria-hidden="true"><span class="menu-mark">▥</span><strong>Workspace</strong><span class="desktop-menu-label">File &nbsp; Edit &nbsp; View</span><span class="desktop-clock">09:41</span></div>
+        <div class="desktop-landscape" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="example-window editor-window" aria-hidden="true">
+          <div class="window-heading"><span class="traffic-lights"><i></i><i></i><i></i></span><span id="example-title">Workspace notes</span></div>
+          <div class="editor-body"><aside><span>WORKSPACE</span><b>Overview</b><span>Ideas</span><span>References</span></aside><div class="editor-copy"><p class="file-label">TODAY / SPACE <span id="example-space">1</span></p><h3>A little room<br>to focus.</h3><div class="fake-line line-long"></div><div class="fake-line"></div><div class="fake-line line-short"></div><div class="note-check"><span>✓</span> Keep the next step visible</div></div></div>
+        </div>
+        <div class="example-window terminal-window" aria-hidden="true"><div class="terminal-heading"><span>Terminal</span><span>⌘ 2</span></div><pre><span>~/workspace</span>
+$ yabai -m query --spaces
+
+<em>1</em>  design  <span>bsp</span>
+<em>2</em>  code    <span>stack</span>
+<em>3</em>  read    <span>float</span>
+<b>▍</b></pre></div>
+        <div class="spacebar" data-control="space" role="group" aria-label="Select an example Space">
+          <span class="drag-grip" aria-hidden="true">⠿</span>
+          <button type="button" data-value="1" aria-pressed="true" aria-label="Preview Space 1"><span class="space-number">1</span><span class="app-mini app-paper" aria-hidden="true"></span><span class="app-mini app-browser" aria-hidden="true"></span></button>
+          <button type="button" data-value="2" aria-pressed="false" aria-label="Preview Space 2"><span class="space-number">2</span><span class="app-mini app-terminal" aria-hidden="true">›_</span></button>
+          <button type="button" data-value="3" aria-pressed="false" aria-label="Preview Space 3"><span class="space-number">3</span></button>
+          <span class="demo-divider" aria-hidden="true"></span><span class="process-example"><span class="app-mini app-paper" aria-hidden="true"></span><span>Notes</span><span class="layout-mark" aria-hidden="true">▥</span></span>
+        </div>
+        <span class="desktop-label">SAMPLE WORKSPACE</span>
+      </div>
+      <div class="preview-controls">
+        <div class="control-group"><span class="control-label" id="placement-label">Placement</span><div class="segmented" data-control="placement" role="group" aria-labelledby="placement-label"><button type="button" data-value="menu" aria-pressed="false">Menu bar</button><button type="button" data-value="top" aria-pressed="true">Top bar</button><button type="button" data-value="floating" aria-pressed="false">Floating</button></div></div>
+        <div class="control-group"><span class="control-label" id="theme-label">Theme</span><div class="theme-switch" data-control="theme" role="group" aria-labelledby="theme-label"><button type="button" data-value="mint" aria-pressed="true"><i class="swatch mint" aria-hidden="true"></i>Mint</button><button type="button" data-value="sky" aria-pressed="false"><i class="swatch sky" aria-hidden="true"></i>Sky</button><button type="button" data-value="mocha" aria-pressed="false"><i class="swatch mocha" aria-hidden="true"></i>Mocha</button></div></div>
+      </div>
+      <p id="preview-description" class="preview-note" aria-live="polite">Illustrative preview: top bar, Mint theme, Space 1. Sample windows only.</p>
+      <noscript><p class="preview-note">Enable JavaScript to change this preview. Downloads and documentation work without it.</p></noscript>
+    </section>
+
+    <section id="features" class="features wrap" aria-labelledby="features-title">
+      <div class="features-heading"><p class="eyebrow">A closer look</p><h2 id="features-title">Know where you are.<br>Get where you need to go.</h2><p>Space labels, app icons, and window state share one compact line. Choose how much of your workspace to show.</p></div>
+      <div class="feature-list">
+        <article><span class="feature-number">01</span><div><h3>Each display has its own context</h3><p>Show all displays or just the current one. Distinguish focused, visible, and inactive Spaces, with independent current-Space markers.</p></div></article>
+        <article><span class="feature-number">02</span><div><h3>Go straight to a Space or window</h3><p>Click a label to switch Spaces or an app icon to focus a window. Use the context menu to manage Spaces, open settings, or quit.</p></div></article>
+        <article><span class="feature-number">03</span><div><h3>See the window state</h3><p>Show float, stack, or bsp layout, sticky state, and stack position. Add the focused app and window title with the optional Process section.</p></div></article>
+        <article><span class="feature-number">04</span><div><h3>Set the spacing and color</h3><p>Adjust icons, fonts, backgrounds, and dividers. Use System, Mint, Sky, Catppuccin, or Tokyo Night colors, then customize individual roles.</p></div></article>
+      </div>
+    </section>
+
+    <section class="architecture wrap" aria-label="How it works"><div><span class="architecture-mark" aria-hidden="true">⌘</span><h3>Native AppKit</h3><p>macOS menus and controls, with per-display bars.</p></div><div><span class="architecture-mark" aria-hidden="true">↗</span><h3>Event-driven updates</h3><p>Native events and yabai signals. No periodic polling.</p></div><div><span class="architecture-mark" aria-hidden="true">{ }</span><h3>Open source</h3><p>GPL-3.0-only. Read the code, report a bug, or build it yourself.</p></div></section>
+
+    <section id="install" class="install-section" aria-labelledby="install-title">
+      <div class="wrap install-layout">
+        <div class="install-intro"><p class="eyebrow">Get started</p><h2 id="install-title">Add a view<br>of your workspace.</h2><p>One universal ZIP for Intel and Apple Silicon. This release candidate is intended for users with an existing yabai setup.</p><a class="button button-mint" href="https://github.com/GladioFeng/yabai-menu/releases/download/v1.0.0-rc.29/Yabai-Menu-1.0.0-universal.zip"><span aria-hidden="true">↓</span> Download build 29</a><div class="asset-links"><a href="https://github.com/GladioFeng/yabai-menu/releases/download/v1.0.0-rc.29/Yabai-Menu-1.0.0-universal.zip.sha256">SHA-256 checksum</a><a href="https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.29">All release assets <span aria-hidden="true">↗</span></a></div></div>
+        <ol class="install-steps">
+          <li><span>1</span><div><h3>Have yabai running</h3><p>Follow the <a href="https://github.com/asmvik/yabai/wiki">yabai setup guide</a>. Yabai Menu uses your existing installation and does not change its configuration files.</p></div></li>
+          <li><span>2</span><div><h3>Unzip and move to Applications</h3><p>Quit an older copy first, then move <strong>Yabai Menu.app</strong> to <code>/Applications</code>. To check the download, put the ZIP and checksum in one folder and run:</p><pre class="checksum-command"><code>shasum -a 256 -c Yabai-Menu-1.0.0-universal.zip.sha256</code></pre></div></li>
+          <li><span>3</span><div><h3>Review the macOS opening prompt</h3><p>This build uses ad-hoc signing and is <strong>not notarized by Apple</strong>. If macOS blocks it and you trust the download, follow <a href="https://support.apple.com/en-us/102445">Apple’s instructions for opening an unverified app</a>.</p></div></li>
+          <li><span>4</span><div><h3>Enable native window updates</h3><p>In <strong>Settings → Connection</strong>, choose <strong>Enable Native Window Updates…</strong>. Allow Yabai Menu in macOS Accessibility settings, then click <strong>Check Connection</strong>.</p></div></li>
+        </ol>
+      </div>
+      <div class="wrap support-note"><strong>Compatibility &amp; validation</strong><p>Built for macOS 13 and later; macOS 13 runtime verification is pending. Local running records cover Intel macOS 14.8.5 and Apple Silicon macOS 15.7.9. <a href="https://github.com/GladioFeng/yabai-menu/actions/runs/39535561423">Build 29 CI</a> passed noninteractive tests and universal builds on both architectures. Physical interaction and display-lifecycle checks remain incomplete.</p></div>
+    </section>
+
+    <section class="faq wrap" aria-labelledby="faq-title"><div><p class="eyebrow">A few details</p><h2 id="faq-title">Before you settle in.</h2><p>For configuration, refresh hooks, and diagnostics, see the <a href="https://github.com/GladioFeng/yabai-menu#readme">full README</a>.</p></div><div class="faq-list">
+      <details><summary>Where are Settings in floating mode?</summary><p>Right-click the bar and choose Settings. Docked and floating bars hide the extra menu-bar entry while they are available. A recovery entry returns when no standalone bar can be shown.</p></details>
+      <details><summary>Which app needs Accessibility permission?</summary><p>Yabai Menu itself needs permission for native window movement and title updates. Enable the copy in <code>/Applications/Yabai Menu.app</code>, then use Check Connection. Copy Diagnostics reports <code>Accessibility</code> and <code>Native window subscriptions</code> so you can check their state.</p></details>
+      <details><summary>Will every external yabai command refresh the bar?</summary><p>Some layout, float, sticky, and window-transfer commands need a refresh notification. Add the <a href="https://github.com/GladioFeng/yabai-menu#commands-that-need-a-notification-hook">documented refresh hook</a> to the relevant script, or use Refresh in the menu.</p></details>
+      <details><summary>Can I build it from source?</summary><p>Yes. Clone the <a href="https://github.com/GladioFeng/yabai-menu">repository</a> and run <code>sh build.sh</code> with a full Xcode installation. The build produces the universal app, ZIP, and checksum. Source and included derivative code use GPL-3.0-only.</p></details>
+    </div></section>
+  </main>
+
+  <footer class="site-footer wrap"><a class="brand" href="#"><img src="assets/app-icon.png" width="30" height="30" alt=""><span>Yabai Menu</span></a><p>By <a href="https://github.com/GladioFeng">GladioFeng</a> · <a href="https://github.com/GladioFeng/yabai-menu/blob/main/LICENSE">GPL-3.0-only</a><br>Presentation and event logic adapted from <a href="https://github.com/Jean-Tinland/a-bar">a-bar</a>. Window data and actions by <a href="https://github.com/asmvik/yabai">yabai</a>.</p><a class="footer-issue" href="https://github.com/GladioFeng/yabai-menu/issues">Report an issue <span aria-hidden="true">↗</span></a></footer>
+</body>
+</html>

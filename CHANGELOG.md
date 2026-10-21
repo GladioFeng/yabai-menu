@@ -74,7 +74,7 @@
 - Keep menu structure changes in AppKit's update callback. Validate uncommitted executable paths before checking the connection.
 - Stage and verify app/ZIP/checksum outputs before replacement; restore previous outputs if publication within `dist/` fails.
 
-This candidate uses ad-hoc signing. Source is public, and hosted CI has passed on Intel and Apple Silicon. A GitHub Release, Developer ID signing, notarization and macOS 13 runtime verification remain pending.
+This candidate uses ad-hoc signing. [v1.0.0-rc.29](https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.29) includes the universal build 29 archive and checksum; hosted CI has passed on Intel and Apple Silicon. Developer ID signing, notarization and macOS 13 runtime verification remain pending.
 
 ## 0.2.0 — preview
 

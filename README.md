@@ -2,6 +2,8 @@
 
 Spaces and window state in the native macOS menu bar or per-display bars. A small companion to [yabai](https://github.com/asmvik/yabai).
 
+[Website](https://gladiofeng.github.io/yabai-menu/) · [Download 1.0.0 RC · build 29](https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.29)
+
 - Show each Space with its app icons and distinguish focused, visible and inactive Spaces.
 - Click individual Spaces or windows directly. Right-click a Space to rename, move, create or delete it.
 - Show the focused app and optional title, independent Space/window layouts, sticky state and stack numbers.
@@ -14,7 +16,7 @@ Spaces and window state in the native macOS menu bar or per-display bars. A smal
 
 <img src="docs/assets/settings.png" alt="Yabai Menu appearance settings with example Spaces preview" width="640">
 
-The screenshot uses example data from the earlier settings layout; build 24 removes the Presentation selector. Source is public; version 1.0.0 remains a release candidate. No GitHub Release or notarized binary has been published.
+The screenshot uses example data from the earlier settings layout; build 24 removes the Presentation selector. Version 1.0.0 remains a release candidate. The [build 29 prerelease](https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.29) includes a universal ZIP and SHA-256 checksum. It uses ad-hoc signing and is not notarized by Apple; see the release notes before installing.
 
 ## Requirements
 
@@ -142,9 +144,9 @@ For the live integration check, first quit Yabai Menu. Choose the installed yaba
 env YABAI_MENU_UI_TESTS=1 YABAI_MENU_LIVE_PATH=/opt/homebrew/bin/yabai swift test
 ```
 
-The live test temporarily registers only `yabai-menu-*` signals and checks cleanup. It does not switch real Spaces or windows. For build 23, [CI run 39091689744](https://github.com/GladioFeng/yabai-menu/actions/runs/39091689744) passed the noninteractive tests and universal builds on Intel and Apple Silicon macOS 15 runners.
+The live test temporarily registers only `yabai-menu-*` signals and checks cleanup. It does not switch real Spaces or windows. For build 29, [CI run 39535561423](https://github.com/GladioFeng/yabai-menu/actions/runs/39535561423) passed the noninteractive tests and universal builds on Intel and Apple Silicon macOS 15 runners.
 
-The reported label flicker was confirmed resolved in build 22 on Apple Silicon macOS 15.7.9. Build 26 still needs interactive acceptance on both architectures. CI and isolated component measurements do not replace macOS 13 runtime checks, physical display lifecycle checks or end-to-end drag performance measurements.
+The reported label flicker was confirmed resolved in build 22 on Apple Silicon macOS 15.7.9. Build 29 has been installed and started on Intel macOS 14.8.5 and Apple Silicon macOS 15.7.9; full interactive acceptance remains incomplete. CI and isolated component measurements do not replace macOS 13 runtime checks, physical display lifecycle checks or end-to-end drag performance measurements.
 
 See [RELEASING.md](RELEASING.md) for release checks and [CHANGELOG.md](CHANGELOG.md) for changes.
 
