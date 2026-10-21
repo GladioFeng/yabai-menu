@@ -2,6 +2,8 @@
 
 ## 1.0.0 — release candidate
 
+- Build 31: replace the app icon with the selected tiled-window design in jade, pistachio and sky blue, with a transparent rounded outline and all standard macOS icon sizes.
+
 - Build 30: refresh the app icon with a light ivory background, soft blue windows and a mint focused window. Keep the three-workspace symbol and all standard macOS icon sizes.
 
 - Build 29: hide the redundant menu-bar entry while docked or floating bars are present. Keep settings and quit actions in each bar's context menu, and restore the menu-bar entry when no bar can be shown.
@@ -76,7 +78,7 @@
 - Keep menu structure changes in AppKit's update callback. Validate uncommitted executable paths before checking the connection.
 - Stage and verify app/ZIP/checksum outputs before replacement; restore previous outputs if publication within `dist/` fails.
 
-This candidate uses ad-hoc signing. [v1.0.0-rc.30](https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.30) includes the universal build 30 archive and checksum; hosted CI has passed on Intel and Apple Silicon. Developer ID signing, notarization and macOS 13 runtime verification remain pending.
+This candidate uses ad-hoc signing. [v1.0.0-rc.31](https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.31) includes the universal build 31 archive and checksum. [Build 29 hosted CI](https://github.com/GladioFeng/yabai-menu/actions/runs/39535561423) passed on Intel and Apple Silicon. Developer ID signing, notarization and macOS 13 runtime verification remain pending.
 
 ## 0.2.0 — preview
 

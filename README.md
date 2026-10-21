@@ -2,7 +2,7 @@
 
 Spaces and window state in the native macOS menu bar or per-display bars. A small companion to [yabai](https://github.com/asmvik/yabai).
 
-[Website](https://gladiofeng.github.io/yabai-menu/) · [Download 1.0.0 RC · build 30](https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.30)
+[Website](https://gladiofeng.github.io/yabai-menu/) · [Download 1.0.0 RC · build 31](https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.31)
 
 - Show each Space with its app icons and distinguish focused, visible and inactive Spaces.
 - Click individual Spaces or windows directly. Right-click a Space to rename, move, create or delete it.
@@ -16,7 +16,7 @@ Spaces and window state in the native macOS menu bar or per-display bars. A smal
 
 <img src="docs/assets/settings.png" alt="Yabai Menu appearance settings with example Spaces preview" width="640">
 
-The screenshot uses example data from the earlier settings layout; build 24 removes the Presentation selector. Version 1.0.0 remains a release candidate. The [build 30 prerelease](https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.30) includes a universal ZIP and SHA-256 checksum. It uses ad-hoc signing and is not notarized by Apple; see the release notes before installing.
+The screenshot uses example data from the earlier settings layout; build 24 removes the Presentation selector. Version 1.0.0 remains a release candidate. The [build 31 prerelease](https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.31) includes a universal ZIP and SHA-256 checksum. It uses ad-hoc signing and is not notarized by Apple; see the release notes before installing.
 
 ## Requirements
 
@@ -152,6 +152,6 @@ See [RELEASING.md](RELEASING.md) for release checks and [CHANGELOG.md](CHANGELOG
 
 ## License and credits
 
-GPL-3.0-only; see [LICENSE](LICENSE). The Space/window presentation is based on [a-bar](https://github.com/Jean-Tinland/a-bar). The native observer, refresh ordering, title/focus reconciliation and JSON compatibility code are adapted from the existing a-bar implementation, with model and lifecycle integration for this app. This app does not bundle a-bar assets. Window data and actions are supplied by yabai. Application icons are read from running applications; the app icon is generated from the paths in `scripts/make-icon.swift`.
+GPL-3.0-only; see [LICENSE](LICENSE). The Space/window presentation is based on [a-bar](https://github.com/Jean-Tinland/a-bar). The native observer, refresh ordering, title/focus reconciliation and JSON compatibility code are adapted from the existing a-bar implementation, with model and lifecycle integration for this app. This app does not bundle a-bar assets. Window data and actions are supplied by yabai. Application icons are read from running applications; `scripts/make-icon.swift` prepares the app icon from the selected artwork in `assets/AppIcon.png`.
 
 Catppuccin and Tokyo Night RGB values come from [Catppuccin's palette](https://github.com/catppuccin/palette) (MIT) and [Tokyo Night](https://github.com/folke/tokyonight.nvim) (Apache-2.0). Mint and Sky use original accent colors with system text and backdrop colors. The floating-window behavior was compared with [Quosparr](https://github.com/Licoy/Quosparr); this app uses its own AppKit implementation and does not include Quosparr code or its Go runtime.
