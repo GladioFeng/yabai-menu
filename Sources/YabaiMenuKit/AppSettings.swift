@@ -11,6 +11,7 @@ struct AppSettings: Equatable {
     enum SpaceScope: String, CaseIterable { case all, focusedDisplay, hidden }
     enum SpaceName: String, CaseIterable { case number, label, numberAndLabel }
     enum FocusStyle: String, CaseIterable { case brackets, bold, underline }
+    enum DisplaySeparatorStyle: String, CaseIterable { case none, line }
     enum WindowScope: String, CaseIterable { case currentSpace, focused, hidden, all }
     enum LayoutStyle: String, CaseIterable { case text, icon, off }
     var density: Density = .standard
@@ -27,7 +28,10 @@ struct AppSettings: Equatable {
     var barBorder = true
     var barShadow = true
     var displayGap = 12
-    var showDisplaySeparators = true
+    var displaySeparatorStyle: DisplaySeparatorStyle = .line
+    var displaySeparatorThickness = 0.5
+    var displaySeparatorPadding = 6
+    var displaySeparatorColor = ""
     var unfocusedBackgroundOpacity = 35
     var colorPreset: ColorPreset = .system
     var focusedSpaceNameColor = ""
@@ -82,6 +86,12 @@ struct AppSettings: Equatable {
         density = Density(rawValue: defaults.string(forKey: "displayDensity") ?? "") ?? .standard
         placement = Placement(rawValue: defaults.string(forKey: "placement") ?? "") ?? .menuBar
         barBackdrop = BarBackdrop(rawValue: defaults.string(forKey: "barBackdrop") ?? "") ?? .glass
+        let dividerStyle = defaults.string(forKey: "displaySeparatorStyle") ?? ""
+        displaySeparatorStyle = DisplaySeparatorStyle(rawValue: dividerStyle == "dot" ? "line" : dividerStyle)
+            ?? ((defaults.object(forKey: "showDisplaySeparators") as? Bool ?? true) ? .line : .none)
+        if let thickness = defaults.object(forKey: "displaySeparatorThickness") as? Double, thickness.isFinite {
+            displaySeparatorThickness = min(4, max(0.5, thickness))
+        }
         colorPreset = ColorPreset(rawValue: defaults.string(forKey: "colorPreset") ?? "") ?? .system
         spaceScope = SpaceScope(rawValue: defaults.string(forKey: "spaceScope") ?? "") ?? .all
         spaceName = SpaceName(rawValue: defaults.string(forKey: "spaceName") ?? "") ?? .number
@@ -115,6 +125,9 @@ struct AppSettings: Equatable {
     func save(to defaults: UserDefaults = .standard) {
         defaults.set(placement.rawValue, forKey: "placement")
         defaults.set(barBackdrop.rawValue, forKey: "barBackdrop")
+        defaults.set(displaySeparatorStyle.rawValue, forKey: "displaySeparatorStyle")
+        defaults.set(displaySeparatorThickness, forKey: "displaySeparatorThickness")
+        defaults.set(displaySeparatorStyle != .none, forKey: "showDisplaySeparators")
         defaults.set(colorPreset.rawValue, forKey: "colorPreset")
         defaults.set(density.rawValue, forKey: "displayDensity")
         defaults.set(spaceScope.rawValue, forKey: "spaceScope")
@@ -141,13 +154,13 @@ struct AppSettings: Equatable {
         (\.showWindowTitle, ("showWindowTitle", true)), (\.processOnlyIcon, ("processOnlyIcon", false)),
         (\.monochrome, ("monochrome", false)), (\.showBorder, ("showBorder", false)),
         (\.floatingLocked, ("floatingLocked", false)), (\.floatingAboveFullscreen, ("floatingAboveFullscreen", false)),
-        (\.barBorder, ("barBorder", true)), (\.barShadow, ("barShadow", true)),
-        (\.showDisplaySeparators, ("showDisplaySeparators", true))]
+        (\.barBorder, ("barBorder", true)), (\.barShadow, ("barShadow", true))]
     private static let numbers: [(WritableKeyPath<Self, Int>, String, ClosedRange<Int>)] = [
         (\.fontSize, "fontSize", 8...24), (\.backgroundOpacity, "backgroundOpacity", 0...100),
         (\.cornerRadius, "cornerRadius", 0...18), (\.iconSize, "iconSize", 8...32),
         (\.layoutIconSize, "layoutIconSize", 8...32), (\.customWidth, "customWidth", 120...1000),
         (\.groupSpacing, "groupSpacing", 0...24), (\.spaceIconGap, "spaceIconGap", 0...16),
+        (\.displaySeparatorPadding, "displaySeparatorPadding", 0...24),
         (\.unfocusedBrightness, "unfocusedBrightness", 0...100),
         (\.unfocusedBackgroundOpacity, "unfocusedBackgroundOpacity", 0...100), (\.displayGap, "displayGap", 0...64),
         (\.floatingHeight, "floatingHeight", 24...64), (\.floatingOpacity, "floatingOpacity", 20...100),
@@ -157,7 +170,8 @@ struct AppSettings: Equatable {
     static let colors: [(WritableKeyPath<Self, String>, String)] = [
         (\.focusedSpaceColor, "focusedSpaceColor"), (\.visibleSpaceColor, "visibleSpaceColor"),
         (\.inactiveSpaceColor, "inactiveSpaceColor"), (\.focusedSpaceNameColor, "focusedSpaceNameColor"),
-        (\.visibleSpaceNameColor, "visibleSpaceNameColor"), (\.inactiveSpaceNameColor, "inactiveSpaceNameColor")]
+        (\.visibleSpaceNameColor, "visibleSpaceNameColor"), (\.inactiveSpaceNameColor, "inactiveSpaceNameColor"),
+        (\.displaySeparatorColor, "displaySeparatorColor")]
 
     static func checkedColor(_ value: String) -> String {
         let hex = value.hasPrefix("#") ? String(value.dropFirst()) : value
@@ -184,6 +198,8 @@ struct AppSettings: Equatable {
     }
 
     var contentColor: NSColor { color("", preset: 6, fallback: .labelColor) }
+    // Mint/Sky 的强调色在背景色中，其余主题沿用焦点名称色。
+    var separatorColor: NSColor { color(displaySeparatorColor, preset: colorPreset.colors[3].isEmpty ? 0 : 3, fallback: .labelColor) }
     func backgroundAlpha(focused: Bool, visible: Bool) -> CGFloat {
         CGFloat(focused ? backgroundOpacity : unfocusedBackgroundOpacity) / 100 * (focused ? 0.65 : (visible ? 0.4 : 0.15))
     }

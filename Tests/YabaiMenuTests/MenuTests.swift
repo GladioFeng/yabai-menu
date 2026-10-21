@@ -288,6 +288,35 @@ final class MenuTests: XCTestCase {
     }
 
     @MainActor
+    func testStandaloneBarsHideTheStatusItemAndKeepRecoveryAccess() throws {
+        guard ProcessInfo.processInfo.environment["YABAI_MENU_UI_TESTS"] == "1" else { throw XCTSkip("AppKit session required") }
+        _ = NSApplication.shared
+        let screen = try XCTUnwrap(NSScreen.screens.first)
+        let displayID = try XCTUnwrap(screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)
+        let state = try Snapshot(spaces: JSONSerialization.data(withJSONObject: [space(1, focus: true)]),
+                                 windows: Data("[]".utf8),
+                                 displays: JSONSerialization.data(withJSONObject: [["id": displayID, "index": 1]]))
+        for placement in [AppSettings.Placement.docked, .floating, .menuBar] {
+            var settings = AppSettings(); settings.placement = placement; settings.spaceScope = .all
+            let controller = MenuBarController(settings: settings)
+            controller.setupItem()
+            let item = try XCTUnwrap(controller.statusItem)
+            defer { controller.floatingBars.close(); NSStatusBar.system.removeStatusItem(item) }
+            if placement == .menuBar { item.isVisible = false }
+            controller.update(state, status: ConnectionStatus(mode: .live))
+            XCTAssertEqual(item.isVisible, placement == .menuBar)
+            if placement != .menuBar { XCTAssertFalse(controller.floatingBars.hosts.isEmpty) }
+            let menu = controller.barContextMenu(.menu)
+            XCTAssertTrue(menu.items.contains { $0.title == "Settings…" })
+            XCTAssertTrue(menu.items.contains { $0.title == "Quit Yabai Menu" })
+            controller.update(nil, status: ConnectionStatus(mode: .disconnected))
+            XCTAssertTrue(item.isVisible, "Keep a recovery entry when no bar can be shown")
+            controller.update(state, status: ConnectionStatus(mode: .live))
+            XCTAssertEqual(item.isVisible, placement == .menuBar)
+        }
+    }
+
+    @MainActor
     func testConnectionWarningsStayInMenuWithoutBarBadges() throws {
         _ = NSApplication.shared
         let state = try snapshot([])
@@ -629,7 +658,7 @@ final class MenuTests: XCTestCase {
             }
         }
         controller.update(state, status: ConnectionStatus(mode: .disconnected, detail: "offline"))
-        XCTAssertTrue(controller.widgetBar?.cells.contains { $0.text == "!" } == true)
+        XCTAssertFalse(controller.widgetBar?.cells.contains { $0.text == "!" } == true, "Connection errors belong in the menu and settings")
         XCTAssertEqual(button.toolTip, "offline")
         controller.update(try snapshot([]), status: ConnectionStatus(mode: .live))
         XCTAssertFalse(controller.widgetBar?.cells.contains( where: \.isProcess) == true)

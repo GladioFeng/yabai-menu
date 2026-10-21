@@ -152,13 +152,13 @@ final class WidgetBarView: NSView {
             if settings.spaceLayout != .off, let space = content.activeSpace {
                 rows.append(Cell(text: settings.spaceLayout == .text ? "Space \(space.type)" : "",
                                  symbol: settings.spaceLayout == .icon ? layoutSymbol(space.type) : nil,
-                                 target: .menu, group: "layout", tooltip: "Current Space layout: \(space.type)"))
+                                 target: .menu, group: "layout", isProcess: true, tooltip: "Current Space layout: \(space.type)"))
             }
             let process = bounded(content.process, focused: \.focused)
             omitted += content.process.count - process.count
             rows += process.map { windowCell($0, space: nil, group: "process-\($0.id)", process: true) }
             if process.isEmpty {
-                rows.append(Cell(text: settings.processOnlyIcon ? "" : "Desktop", symbol: "app.dashed", target: .menu, group: "desktop", tooltip: "No windows in the selected Process scope"))
+                rows.append(Cell(text: settings.processOnlyIcon ? "" : "Desktop", symbol: "app.dashed", target: .menu, group: "desktop", isProcess: true, tooltip: "No windows in the selected Process scope"))
             }
         }
         let state = RenderState(cells: rows, settings: settings, omitted: omitted, height: height, enabled: enabled)
@@ -182,13 +182,15 @@ final class WidgetBarView: NSView {
         }
         var groupGap = CGFloat(settings.groupSpacing), iconGap = CGFloat(settings.spaceIconGap)
         var displayGap = CGFloat(settings.displayGap)
-        var showSeparators = settings.showDisplaySeparators
-        func displayBoundary(_ a: Cell, _ b: Cell) -> Bool {
-            a.group.hasPrefix("space-") && b.group.hasPrefix("space-") && a.display != nil && b.display != nil && a.display != b.display
+        var showSeparators = settings.displaySeparatorStyle != .none
+        let separatorGap = CGFloat(settings.displaySeparatorThickness) + CGFloat(settings.displaySeparatorPadding) * 2
+        func separatorBoundary(_ a: Cell, _ b: Cell) -> Bool {
+            (!a.isProcess && b.isProcess)
+                || (a.group.hasPrefix("space-") && b.group.hasPrefix("space-") && a.display != nil && b.display != nil && a.display != b.display)
         }
         func gap(_ a: Cell, _ b: Cell) -> CGFloat {
             if a.group == b.group { return iconGap }
-            if showSeparators && displayBoundary(a, b) { return max(7, displayGap) }
+            if showSeparators && separatorBoundary(a, b) { return separatorGap }
             if let first = a.display, let second = b.display, first != second { return displayGap }
             return groupGap
         }
@@ -261,7 +263,7 @@ final class WidgetBarView: NSView {
             x += cell.width
             if index + 1 < rows.count {
                 let next = rows[index + 1], spacing = gap(cell, next)
-                if showSeparators && displayBoundary(cell, next) { separators.append(x + spacing / 2) }
+                if showSeparators && separatorBoundary(cell, next) { separators.append(x + spacing / 2) }
                 x += spacing
             }
         }
@@ -355,12 +357,13 @@ final class WidgetBarView: NSView {
             path.fill()
             if settings.showBorder && settings.backgroundAlpha(focused: focused, visible: visible) > 0 { NSColor.labelColor.withAlphaComponent(0.15).setStroke(); path.lineWidth = 1; path.stroke() }
         }
-        settings.contentColor.withAlphaComponent(0.45).setStroke()
+        let separatorColor = settings.separatorColor.withAlphaComponent(0.45)
+        separatorColor.setStroke()
         for x in displaySeparators {
             let line = NSBezierPath()
             line.move(to: NSPoint(x: x, y: bounds.height * 0.25))
             line.line(to: NSPoint(x: x, y: bounds.height * 0.75))
-            line.lineWidth = 0.5
+            line.lineWidth = CGFloat(settings.displaySeparatorThickness)
             line.stroke()
         }
     }

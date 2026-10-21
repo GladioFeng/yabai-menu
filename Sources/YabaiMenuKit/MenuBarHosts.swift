@@ -69,6 +69,14 @@ final class MenuBarHosts {
                     visible: window.isVisible && onscreen.contains(window.windowNumber))
     }
 
+    static func contentFrame(in window: NSWindow) -> NSRect {
+        // Native slots include chrome around the inset view that contains their mirrored button.
+        guard let root = window.contentView, root.subviews.count == 1, let content = root.subviews.first else { return window.frame }
+        let frame = window.convertToScreen(content.convert(content.bounds, to: nil))
+        guard frame.height >= 20, frame.width > 0, window.frame.contains(frame) else { return window.frame }
+        return frame
+    }
+
     struct Placement {
         let frame: NSRect
         let contentOrigin: NSPoint
@@ -102,8 +110,8 @@ final class MenuBarHosts {
             var local = settings
             local.spaceScope = .focusedDisplay
             // A notched screen and an external screen can have different menu-bar heights.
-            let localSlots = initialSlots.compactMap { Self.anchorFrame($0.frame, screen: screen.frame, visible: true) }
-            let height = localSlots.count == 1 ? localSlots[0].height : NSStatusBar.system.thickness
+            let localSlots = initialSlots.filter { Self.anchorFrame($0.frame, screen: screen.frame, visible: true) != nil }
+            let height = localSlots.count == 1 ? Self.contentFrame(in: localSlots[0]).height : NSStatusBar.system.thickness
             host.bar.onSelect = select
             host.bar.contextMenu = menu
             if host.bar.menu == nil {
@@ -134,7 +142,7 @@ final class MenuBarHosts {
                 continue
             }
             let previousSize = host.anchorNumber == slot.windowNumber && !host.bar.cells.isEmpty ? host.bar.frame.size : nil
-            guard let placement = Self.placement(in: slot.frame, requestedWidth: width,
+            guard let placement = Self.placement(in: Self.contentFrame(in: slot), requestedWidth: width,
                                                 nextSize: layouts[screen.id]?.size ?? host.bar.frame.size, previousSize: previousSize) else {
                 if host.panel.isVisible { host.panel.orderOut(nil) }
                 continue

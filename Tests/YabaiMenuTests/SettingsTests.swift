@@ -132,7 +132,9 @@ final class SettingsTests: XCTestCase {
         settings.barBorder = false
         settings.barShadow = false
         settings.displayGap = 37
-        settings.showDisplaySeparators = false
+        settings.displaySeparatorStyle = .line
+        settings.displaySeparatorThickness = 2.5
+        settings.displaySeparatorColor = "#445566"
         settings.unfocusedBackgroundOpacity = 0
         settings.colorPreset = .tokyoNight
         settings.focusedSpaceNameColor = "#336699"
@@ -165,6 +167,105 @@ final class SettingsTests: XCTestCase {
         XCTAssertThrowsError(try AppSettings.checkedPath("echo"))
         XCTAssertThrowsError(try AppSettings.checkedPath("/tmp"))
         XCTAssertThrowsError(try AppSettings.checkedPath("/not/a/real/yabai"))
+    }
+
+    func testDisplayDividerLegacyMigrationAndValidation() throws {
+        let suite = "test.yabai-menu.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let initial = AppSettings(defaults: defaults)
+        XCTAssertEqual(initial.displaySeparatorStyle, .line)
+        XCTAssertEqual(initial.displaySeparatorThickness, 0.5)
+        XCTAssertEqual(initial.separatorColor, initial.contentColor)
+        defaults.set(false, forKey: "showDisplaySeparators")
+        XCTAssertEqual(AppSettings(defaults: defaults).displaySeparatorStyle, .none)
+        defaults.set("unsupported", forKey: "displaySeparatorStyle")
+        XCTAssertEqual(AppSettings(defaults: defaults).displaySeparatorStyle, .none)
+        defaults.set("dot", forKey: "displaySeparatorStyle")
+        defaults.set("#aabbcc", forKey: "displaySeparatorColor")
+        var settings = AppSettings(defaults: defaults)
+        XCTAssertEqual(settings.displaySeparatorStyle, .line, "The removed Dot style migrates to Line")
+        XCTAssertEqual(settings.displaySeparatorColor, "#AABBCC")
+        settings.displaySeparatorThickness = 2.5
+        settings.displaySeparatorPadding = 9
+        settings.save(to: defaults)
+        XCTAssertEqual(AppSettings(defaults: defaults), settings)
+        XCTAssertTrue(defaults.bool(forKey: "showDisplaySeparators"), "Keep older builds compatible")
+        settings.displaySeparatorStyle = .none
+        settings.save(to: defaults)
+        XCTAssertFalse(defaults.bool(forKey: "showDisplaySeparators"))
+        for (input, expected) in [(0.0, 0.5), (99.0, 4.0), (Double.nan, 0.5), (Double.infinity, 0.5)] {
+            defaults.set(input, forKey: "displaySeparatorThickness")
+            XCTAssertEqual(AppSettings(defaults: defaults).displaySeparatorThickness, expected)
+        }
+        defaults.set("invalid", forKey: "displaySeparatorColor")
+        XCTAssertEqual(AppSettings(defaults: defaults).displaySeparatorColor, "")
+        for (input, expected) in [(-5, 0), (99, 24)] {
+            defaults.set(input, forKey: "displaySeparatorPadding")
+            XCTAssertEqual(AppSettings(defaults: defaults).displaySeparatorPadding, expected)
+        }
+        settings.displaySeparatorColor = ""
+        settings.colorPreset = .mint
+        let mint = settings.separatorColor
+        settings.colorPreset = .sky
+        XCTAssertNotEqual(settings.separatorColor, mint)
+        XCTAssertEqual(settings.separatorColor, settings.spaceColor(focused: true, visible: true))
+    }
+
+    @MainActor
+    func testDisplayDividerControlsUpdatePreviewAndFollowColorReset() throws {
+        guard ProcessInfo.processInfo.environment["YABAI_MENU_UI_TESTS"] == "1" else { throw XCTSkip("AppKit session required") }
+        _ = NSApplication.shared
+        let controller = SettingsWindowController(settings: AppSettings(), loginAccess: LoginItemAccess(status: { .notRegistered }, setEnabled: { _ in }, openSettings: {}))
+        defer { controller.close() }
+        var changes = 0
+        controller.onChange = { _ in changes += 1 }
+        let color = try XCTUnwrap(controller.colors[\.displaySeparatorColor])
+        XCTAssertEqual(controller.displaySeparatorStyle.itemTitles, ["None", "Line"])
+        controller.displaySeparatorStyle.selectItem(at: 1)
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(controller.displaySeparatorStyle.action), to: controller.displaySeparatorStyle.target, from: controller.displaySeparatorStyle))
+        controller.displaySeparatorThickness.selectItem(at: 3)
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(controller.displaySeparatorThickness.action), to: controller.displaySeparatorThickness.target, from: controller.displaySeparatorThickness))
+        color.color = .red
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(color.action), to: color.target, from: color))
+        XCTAssertEqual(controller.value.displaySeparatorStyle, .line)
+        XCTAssertEqual(controller.value.displaySeparatorThickness, 2)
+        XCTAssertEqual(controller.value.displaySeparatorColor, "#FF0000")
+        XCTAssertFalse(controller.richPreview.displaySeparators.isEmpty)
+        func findPadding(in view: NSView) -> NSPopUpButton? {
+            if let popup = view as? NSPopUpButton, popup.toolTip?.hasPrefix("Clear space on each side") == true { return popup }
+            return view.subviews.lazy.compactMap { findPadding(in: $0) }.first
+        }
+        let padding = try XCTUnwrap(findPadding(in: XCTUnwrap(controller.window?.contentView)))
+        padding.selectItem(withTag: 9)
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(padding.action), to: padding.target, from: padding))
+        XCTAssertEqual(controller.value.displaySeparatorPadding, 9)
+        if let directory = ProcessInfo.processInfo.environment["YABAI_MENU_TEST_OUTPUT"], let content = controller.window?.contentView {
+            let appearance = try XCTUnwrap(NSAppearance(named: .aqua))
+            controller.window?.appearance = appearance
+            content.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(content.bitmapImageRepForCachingDisplay(in: content.bounds))
+            appearance.performAsCurrentDrawingAppearance { content.cacheDisplay(in: content.bounds, to: bitmap) }
+            let output = NSImage(size: content.bounds.size)
+            output.lockFocus()
+            appearance.performAsCurrentDrawingAppearance {
+                NSColor.windowBackgroundColor.setFill(); content.bounds.fill()
+            }
+            NSImage(cgImage: try XCTUnwrap(bitmap.cgImage), size: content.bounds.size).draw(in: content.bounds)
+            output.unlockFocus()
+            let png = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(output.tiffRepresentation)))
+            try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+            try XCTUnwrap(png.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: directory).appendingPathComponent("settings-dividers.png"))
+        }
+        controller.displaySeparatorStyle.selectItem(at: 0)
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(controller.displaySeparatorStyle.action), to: controller.displaySeparatorStyle.target, from: controller.displaySeparatorStyle))
+        XCTAssertTrue(controller.richPreview.displaySeparators.isEmpty)
+        XCTAssertFalse(controller.displaySeparatorThickness.isEnabled || padding.isEnabled || color.isEnabled)
+        controller.colorPreset.selectItem(at: 1)
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(controller.colorPreset.action), to: controller.colorPreset.target, from: controller.colorPreset))
+        XCTAssertEqual(controller.value.displaySeparatorColor, "")
+        XCTAssertEqual(color.color, controller.value.separatorColor)
+        XCTAssertEqual(changes, 6)
     }
 
     func testLegacyPresentationIsIgnoredWithoutChangingOtherPreferences() throws {

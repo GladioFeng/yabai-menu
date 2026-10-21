@@ -53,7 +53,7 @@ final class DisplayTests: XCTestCase {
         var settings = AppSettings()
         settings.density = .custom; settings.customWidth = 1000
         settings.showSpaceIcons = false; settings.showCreateSpace = false
-        settings.displayGap = 37; settings.groupSpacing = 4
+        settings.displayGap = 37; settings.groupSpacing = 4; settings.displaySeparatorStyle = .none
         let bar = WidgetBarView()
         let snapshot = try state()
         bar.configure(snapshot, settings: settings, display: 1) { _ in nil }
@@ -162,15 +162,15 @@ final class DisplayTests: XCTestCase {
         var settings = AppSettings()
         settings.spaceScope = .all; settings.showSpaceIcons = false; settings.showCreateSpace = false
         settings.density = .custom; settings.customWidth = 1000
-        settings.displayGap = 0; settings.showDisplaySeparators = false
+        settings.displayGap = 0; settings.displaySeparatorStyle = .none
         let bar = WidgetBarView(), snapshot = try state()
         bar.configure(snapshot, settings: settings) { _ in nil }
         let width = bar.frame.width, targets = bar.cells.map(\.target)
         XCTAssertTrue(bar.displaySeparators.isEmpty)
-        settings.showDisplaySeparators = true
+        settings.displaySeparatorStyle = .line
         bar.configure(snapshot, settings: settings) { _ in nil }
         XCTAssertEqual(bar.cells.map(\.target), targets)
-        XCTAssertEqual(bar.frame.width, width + 7)
+        XCTAssertEqual(bar.frame.width, width + 12.5)
         XCTAssertEqual(bar.displaySeparators.count, 1)
         let divider = try XCTUnwrap(bar.displaySeparators.first)
         XCTAssertGreaterThan(divider, bar.subviews[2].frame.maxX)
@@ -184,6 +184,181 @@ final class DisplayTests: XCTestCase {
         settings.spaceScope = .hidden; settings.windowScope = .all
         bar.configure(snapshot, settings: settings) { _ in nil }
         XCTAssertTrue(bar.displaySeparators.isEmpty, "Process rows are not Space display groups")
+    }
+
+    func testSpaceProcessDividerTracksTheVisibleSectionBoundary() throws {
+        _ = NSApplication.shared
+        var settings = AppSettings()
+        settings.spaceScope = .focusedDisplay; settings.windowScope = .all
+        settings.showSpaceIcons = false; settings.showCreateSpace = true
+        settings.density = .custom; settings.customWidth = 1000
+        settings.groupSpacing = 0; settings.displaySeparatorThickness = 4; settings.displaySeparatorStyle = .line
+        let bar = WidgetBarView(), snapshot = try state()
+        for layout in [AppSettings.LayoutStyle.icon, .off] {
+            settings.spaceLayout = layout
+            bar.configure(snapshot, settings: settings, display: 2) { _ in nil }
+            let first = try XCTUnwrap(bar.cells.firstIndex(where: \.isProcess))
+            let divider = try XCTUnwrap(bar.displaySeparators.first)
+            XCTAssertEqual(bar.displaySeparators.count, 1)
+            XCTAssertGreaterThanOrEqual(divider - 2, bar.subviews[first - 1].frame.maxX)
+            XCTAssertLessThanOrEqual(divider + 2, bar.subviews[first].frame.minX)
+        }
+        settings.displaySeparatorPadding = 9
+        bar.configure(snapshot, settings: settings, display: 2) { _ in nil }
+        let first = try XCTUnwrap(bar.cells.firstIndex(where: \.isProcess))
+        let divider = try XCTUnwrap(bar.displaySeparators.first)
+        XCTAssertEqual(divider - 2 - bar.subviews[first - 1].frame.maxX, 9)
+        XCTAssertEqual(bar.subviews[first].frame.minX - divider - 2, 9)
+        bar.configure(try state(excludingPID: 1004), settings: settings, display: 2) { _ in nil }
+        XCTAssertEqual(bar.cells.last?.group, "desktop")
+        XCTAssertEqual(bar.displaySeparators.count, 1, "The empty Process state keeps its section boundary")
+        settings.spaceScope = .hidden
+        bar.configure(snapshot, settings: settings, display: 2) { _ in nil }
+        XCTAssertTrue(bar.displaySeparators.isEmpty)
+        settings.spaceScope = .focusedDisplay; settings.windowScope = .hidden
+        bar.configure(snapshot, settings: settings, display: 2) { _ in nil }
+        XCTAssertTrue(bar.displaySeparators.isEmpty)
+        settings.windowScope = .all; settings.displaySeparatorStyle = .none
+        bar.configure(snapshot, settings: settings, display: 2) { _ in nil }
+        XCTAssertTrue(bar.displaySeparators.isEmpty)
+    }
+
+    func testDisplayDividerStylesPaintWithoutChangingTargetsOrReloadingIcons() throws {
+        _ = NSApplication.shared
+        var settings = AppSettings()
+        settings.spaceScope = .all; settings.windowScope = .hidden
+        settings.density = .custom; settings.customWidth = 1000
+        settings.showCreateSpace = false; settings.displayGap = 0
+        settings.displaySeparatorThickness = 4; settings.displaySeparatorColor = "#FF0000"
+        settings.backgroundOpacity = 0; settings.unfocusedBackgroundOpacity = 0
+        settings.focusedSpaceNameColor = "#000000"; settings.visibleSpaceNameColor = "#000000"; settings.inactiveSpaceNameColor = "#000000"
+        let bar = WidgetBarView(), snapshot = try state()
+        let icon = NSImage(size: NSSize(width: 16, height: 16))
+        var iconCalls = 0
+        var targets: [BarTarget] = []
+        for style in [AppSettings.DisplaySeparatorStyle.line, .none] {
+            settings.displaySeparatorStyle = style
+            bar.configure(snapshot, settings: settings) { _ in iconCalls += 1; return icon }
+            if targets.isEmpty { targets = bar.cells.map(\.target) }
+            XCTAssertEqual(bar.cells.map(\.target), targets)
+            XCTAssertEqual(iconCalls, 2, "Changing a divider must reuse the existing icons")
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+                pixelsWide: Int(bar.bounds.width * 2), pixelsHigh: Int(bar.bounds.height * 2),
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            bitmap.size = bar.bounds.size
+            bar.cacheDisplay(in: bar.bounds, to: bitmap)
+            if let directory = ProcessInfo.processInfo.environment["YABAI_MENU_TEST_OUTPUT"] {
+                try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: directory).appendingPathComponent("divider-\(style.rawValue).png"))
+            }
+            var pixels: [(Int, Int)] = []
+            for y in 0..<bitmap.pixelsHigh {
+                for x in 0..<bitmap.pixelsWide {
+                    if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                       color.redComponent > 0.85 && color.greenComponent < 0.15 && color.blueComponent < 0.15 && color.alphaComponent > 0.15 {
+                        pixels.append((x, y))
+                    }
+                }
+            }
+            if style == .none { XCTAssertTrue(pixels.isEmpty); XCTAssertTrue(bar.displaySeparators.isEmpty); continue }
+            let marker = try XCTUnwrap(bar.displaySeparators.first)
+            let edge = try XCTUnwrap(bar.cells.lastIndex { $0.display == 1 })
+            XCTAssertGreaterThanOrEqual(marker - 2, bar.subviews[edge].frame.maxX)
+            XCTAssertLessThanOrEqual(marker + 2, bar.subviews[edge + 1].frame.minX)
+            let pixelWidth = try XCTUnwrap(pixels.map { $0.0 }.max()) - XCTUnwrap(pixels.map { $0.0 }.min()) + 1
+            let pixelHeight = try XCTUnwrap(pixels.map { $0.1 }.max()) - XCTUnwrap(pixels.map { $0.1 }.min()) + 1
+            XCTAssertLessThanOrEqual(abs(pixelWidth - 8), 1)
+            XCTAssertGreaterThan(pixelHeight, pixelWidth * 2)
+        }
+    }
+
+    func testNativeContentFrameUsesEachSlotsOwnInsets() throws {
+        _ = NSApplication.shared
+        for height in [CGFloat(24), 37] {
+            let slot = FloatingBarPanel(contentRect: NSRect(x: 200, y: 400, width: 200, height: height), styleMask: [.borderless], backing: .buffered, defer: false)
+            slot.isReleasedWhenClosed = false
+            defer { slot.close() }
+            XCTAssertEqual(MenuBarHosts.contentFrame(in: slot), slot.frame)
+            let content = NSView(frame: NSRect(x: 1, y: 1, width: 198, height: height - 2))
+            slot.contentView?.addSubview(content)
+            XCTAssertEqual(MenuBarHosts.contentFrame(in: slot), slot.frame.insetBy(dx: 1, dy: 1))
+            content.frame.origin.y = -1
+            XCTAssertEqual(MenuBarHosts.contentFrame(in: slot), slot.frame, "Reject a transient content frame outside its native slot")
+        }
+    }
+
+    func testNativeScopesKeepTheSameBackgroundVerticalInsets() throws {
+        guard ProcessInfo.processInfo.environment["YABAI_MENU_UI_TESTS"] == "1" else { throw XCTSkip("AppKit session required") }
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.accessory)
+        NSApp.finishLaunching()
+        func settle() {
+            let deadline = Date(timeIntervalSinceNow: 0.15)
+            while Date() < deadline {
+                if let event = NSApp.nextEvent(matching: .any, until: deadline, inMode: .default, dequeue: true) {
+                    NSApp.sendEvent(event)
+                }
+            }
+        }
+        var settings = AppSettings()
+        settings.spaceScope = .all; settings.windowScope = .hidden
+        settings.density = .custom; settings.customWidth = 1000
+        settings.showSpaceIcons = false; settings.showCreateSpace = false
+        settings.spaceName = .number; settings.focusStyle = .bold
+        settings.focusedSpaceColor = "#FF0000"; settings.backgroundOpacity = 100
+        settings.unfocusedBackgroundOpacity = 0; settings.showBorder = false
+        let snapshot = try state(focused: 1)
+        let controller = MenuBarController(settings: settings)
+        controller.setupItem()
+        let item = try XCTUnwrap(controller.statusItem)
+        defer { NSStatusBar.system.removeStatusItem(item) }
+        controller.update(snapshot, status: ConnectionStatus(mode: .live))
+        settle()
+        controller.update(snapshot, status: ConnectionStatus(mode: .live), force: true)
+        let button = try XCTUnwrap(item.button), slot = try XCTUnwrap(button.window)
+        let screen = try XCTUnwrap(slot.screen)
+        let allBar = try XCTUnwrap(controller.widgetBar)
+        let allCell = try XCTUnwrap(allBar.subviews.first)
+        let allRect = allBar.convert(allCell.frame.insetBy(dx: 0.5, dy: 0.5), to: nil)
+
+        func paintedHeight(_ view: NSView, name: String) throws -> CGFloat {
+            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            if let directory = ProcessInfo.processInfo.environment["YABAI_MENU_TEST_OUTPUT"] {
+                try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: directory).appendingPathComponent("background-\(name).png"))
+            }
+            let rows = (0..<bitmap.pixelsHigh).filter { y in
+                (0..<bitmap.pixelsWide).contains { x in
+                    guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return false }
+                    return color.redComponent > 0.85 && color.greenComponent < 0.15 && color.blueComponent < 0.15 && color.alphaComponent > 0.5
+                }
+            }
+            return CGFloat(try XCTUnwrap(rows.last) - XCTUnwrap(rows.first) + 1) * view.bounds.height / CGFloat(bitmap.pixelsHigh)
+        }
+        let allPaintedHeight = try paintedHeight(button, name: "all")
+        allBar.removeFromSuperview()
+        let hosts = MenuBarHosts(screens: { _ in [.init(id: 101, index: 1, frame: screen.frame)] })
+        defer { hosts.close() }
+        settings.spaceScope = .focusedDisplay
+        for _ in 0..<2 {
+            hosts.update(snapshot, settings: settings, status: ConnectionStatus(mode: .live),
+                         reserveWidth: { if item.length != $0 { item.length = $0 } }, icon: { _ in nil }, menu: { _ in nil }, select: { _ in })
+            settle()
+        }
+        let local = try XCTUnwrap(hosts.hosts[101])
+        let onscreen = Set((CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? []).compactMap { $0[kCGWindowNumber as String] as? Int })
+        let nativeSlots = NSApp.windows.filter { $0.level == .statusBar && MenuBarHosts.anchorFrame($0, screen: screen.frame, onscreen: onscreen) != nil }
+        guard nativeSlots.count == 1 else { throw XCTSkip("Unhide the test status item before comparing native backgrounds") }
+        XCTAssertTrue(local.panel.isVisible, "A valid native slot must produce a visible overlay")
+        let localCell = try XCTUnwrap(local.bar.subviews.first)
+        let localRect = local.panel.convertToScreen(local.bar.convert(localCell.frame.insetBy(dx: 0.5, dy: 0.5), to: nil))
+            .offsetBy(dx: -slot.frame.minX, dy: -slot.frame.minY)
+        let localPaintedHeight = try paintedHeight(try XCTUnwrap(local.panel.contentView), name: "local")
+        XCTAssertEqual(localRect.minY, allRect.minY, accuracy: 0.5)
+        XCTAssertEqual(localRect.height, allRect.height, accuracy: 0.5)
+        XCTAssertEqual(localPaintedHeight, allPaintedHeight, accuracy: 0.5)
     }
 
     func testMenuBarAnchorRejectsHiddenOffscreenAndWrongSlots() {
@@ -328,10 +503,10 @@ final class DisplayTests: XCTestCase {
         let snapshot = try state()
         controller.update(snapshot, status: ConnectionStatus(mode: .live))
         let width = try XCTUnwrap(controller.statusItem?.length)
-        XCTAssertEqual(width, hosts.hosts.values.map { $0.bar.frame.width }.max(), "There must be no extra ellipsis reservation")
         for slot in slots { slot.setContentSize(NSSize(width: width + 2, height: 24)); slot.orderFrontRegardless() }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
         controller.update(snapshot, status: ConnectionStatus(mode: .live), force: true)
+        XCTAssertEqual(width, hosts.hosts.values.map { $0.bar.frame.width }.max(), "A ready slot must not reserve an extra ellipsis")
         var choices: [(Int?, Int?)] = []
         controller.focusAction = { choices.append(($0, $1)) }
         for (index, screen) in screens.enumerated() {

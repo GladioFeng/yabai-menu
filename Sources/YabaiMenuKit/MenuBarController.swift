@@ -182,6 +182,7 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
         self.snapshot = snapshot
         self.status = status
         settingsWindow?.updateStatus(status, path: client?.path)
+        if settings.effectivePlacement == .menuBar, statusItem?.isVisible == false { statusItem?.isVisible = true }
         let automaticMenu: NSMenu? = settings.placement == .menuBar && snapshot != nil ? nil : fullMenu
         if statusItem?.menu !== automaticMenu { statusItem?.menu = automaticMenu }
         if changed || force {
@@ -238,6 +239,8 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
                 settingsWindow?.updatePreview(snapshot) { [weak self] in self?.icon(for: $0) }
             }
         }
+        let showStatusItem = floatingBars.hosts.isEmpty
+        if statusItem?.isVisible != showStatusItem { statusItem?.isVisible = showStatusItem }
         let current = snapshot?.focusedSpace.map { "Space \($0.index)" } ?? "No focused Space"
         let window = snapshot?.focusedWindow.map { "\($0.app), \($0.title), \($0.state)" } ?? "No focused window"
         statusItem?.button?.setAccessibilityLabel("\(current). \(window). \(status.title). Open menu to switch.")

@@ -2,6 +2,12 @@
 
 ## 1.0.0 — release candidate
 
+- Build 29: hide the redundant menu-bar entry while docked or floating bars are present. Keep settings and quit actions in each bar's context menu, and restore the menu-bar entry when no bar can be shown.
+
+- Build 28: add a divider between Spaces and Process, with adjustable symmetric side padding and theme accent colors. Keep None and Line styles, migrating old Dot settings to Line. Omit the section divider when either section is hidden.
+
+- Build 27: align per-display menu-bar backgrounds with the native button's content insets. Add None, Line and Dot display dividers with adjustable gap, thickness and color, preserving the old divider preference.
+
 - Build 26: vertically center visible Space labels with app icons, preserving focus underlines and clipping long labels to their buttons.
 
 - Build 25: omit explicitly invisible sticky windows from Space and sticky icon groups, including 1Password's ordered-out auxiliary window. Preserve real sticky windows, other-Space app icons and the Process recovery list.

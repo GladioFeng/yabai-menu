@@ -28,6 +28,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     let windowLayout = NSPopUpButton()
     let spaceLayout = NSPopUpButton()
     let spaceWindowLayout = NSPopUpButton()
+    let displaySeparatorStyle = NSPopUpButton()
+    let displaySeparatorThickness = NSPopUpButton()
     private(set) var colors: [WritableKeyPath<AppSettings, String>: NSColorWell] = [:]
     let richPreview = WidgetBarView()
     let previewBackdrop = BarBackdropView()
@@ -82,6 +84,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         spaceName.selectItem(at: AppSettings.SpaceName.allCases.firstIndex(of: settings.spaceName)!)
         focusStyle.addItems(withTitles: ["Brackets and bold", "Bold", "Underline and bold"])
         focusStyle.selectItem(at: AppSettings.FocusStyle.allCases.firstIndex(of: settings.focusStyle)!)
+        displaySeparatorStyle.addItems(withTitles: ["None", "Line"])
+        displaySeparatorStyle.toolTip = "Between displays and between Spaces and Process"
+        displaySeparatorStyle.selectItem(at: AppSettings.DisplaySeparatorStyle.allCases.firstIndex(of: settings.displaySeparatorStyle)!)
+        let thicknesses = Array(stride(from: 0.5, through: 4.0, by: 0.5))
+        for thickness in thicknesses + (thicknesses.contains(settings.displaySeparatorThickness) ? [] : [settings.displaySeparatorThickness]) {
+            displaySeparatorThickness.addItem(withTitle: String(format: "%g pt", thickness))
+            displaySeparatorThickness.lastItem?.representedObject = thickness
+            if thickness == settings.displaySeparatorThickness { displaySeparatorThickness.selectItem(at: displaySeparatorThickness.numberOfItems - 1) }
+        }
+        displaySeparatorThickness.toolTip = "Line width"
         windowScope.addItems(withTitles: ["Current Space windows", "Focused window only", "Hide Process", "All Spaces windows"])
         windowScope.selectItem(at: AppSettings.WindowScope.allCases.firstIndex(of: settings.windowScope)!)
         for size in 8...32 { iconSize.addItem(withTitle: "\(size) pt"); iconSize.lastItem?.tag = size }
@@ -108,7 +120,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         path.delegate = self
         path.target = self
         path.action = #selector(commitPath)
-        for popup in [density, scope, spaceName, focusStyle, windowScope, iconSize, placement, barBackdrop, colorPreset, windowLayout, spaceLayout, spaceWindowLayout] { popup.target = self; popup.action = #selector(displayChanged(_:)) }
+        for popup in [density, scope, spaceName, focusStyle, windowScope, iconSize, placement, barBackdrop, colorPreset, windowLayout, spaceLayout, spaceWindowLayout, displaySeparatorStyle, displaySeparatorThickness] { popup.target = self; popup.action = #selector(displayChanged(_:)) }
         layout.target = self; layout.action = #selector(displayChanged(_:))
         login.target = self; login.action = #selector(loginChanged)
         login.allowsMixedState = true
@@ -157,11 +169,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             [label("Space icon gap"), number(\.spaceIconGap, values: Array(0...16), suffix: " pt")],
             [label("Group gap"), number(\.groupSpacing, values: Array(0...24), suffix: " pt")],
             [label("Display gap"), number(\.displayGap, values: Array(0...64), suffix: " pt")],
-            [label("Display divider"), toggle("Show a line between displays", \.showDisplaySeparators)],
+            [label("Divider style"), displaySeparatorStyle],
+            [label("Divider size"), displaySeparatorThickness],
+            [label("Divider padding"), number(\.displaySeparatorPadding, values: Array(0...24), suffix: " pt")],
+            [label("Divider color"), color(\.displaySeparatorColor, value: settings.separatorColor)],
             [label("Font"), text(\.fontName, placeholder: "System font")],
             [label("Font size"), number(\.fontSize, values: Array(8...24), suffix: " pt")],
             [label("App icons"), toggle("Monochrome", \.monochrome)]
         ])
+        numbers[\.displaySeparatorPadding]?.toolTip = "Clear space on each side of a divider; replaces the gap at that boundary"
         let colorsGrid = NSGridView(views: [
             [label("Theme preset"), colorPreset],
             [label("Focused Space"), color(\.focusedSpaceColor, value: settings.spaceColor(focused: true, visible: true))],
@@ -243,7 +259,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         let spacesNote = NSTextField(wrappingLabelWithString: "Current Space marks each display's visible Space, even with no background. This display only also works in Menu bar placement. Left-click a Space/app to select it; right-click for management, the full menu and settings. Invalid regex patterns match nothing.")
         let processNote = NSTextField(wrappingLabelWithString: "Process is optional. Both views show window layout and sticky state inside Spaces. Space layout describes the desktop; window layout describes the focused window. Hidden and minimized windows stay available for recovery.")
         for note in [spacesNote, processNote] { note.font = .systemFont(ofSize: 11); note.textColor = .secondaryLabelColor; note.widthAnchor.constraint(equalToConstant: 464).isActive = true }
-        let colorNote = NSTextField(wrappingLabelWithString: "Space background and name colors are independent. Set Unfocused bg to 0% for transparent inactive Spaces. Picking a preset replaces the six color overrides; later edits customize that preset.")
+        let colorNote = NSTextField(wrappingLabelWithString: "Space background, name and divider colors are independent. Set Unfocused bg to 0% for transparent inactive Spaces. Picking a preset replaces the color overrides; later edits customize that preset.")
         colorNote.font = .systemFont(ofSize: 11); colorNote.textColor = .secondaryLabelColor
         colorNote.widthAnchor.constraint(equalToConstant: 464).isActive = true
         let resetColors = NSButton(title: "Use System Colors", target: self, action: #selector(resetColors))
@@ -330,6 +346,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         }
         value.spaceName = AppSettings.SpaceName.allCases[spaceName.indexOfSelectedItem]
         value.focusStyle = AppSettings.FocusStyle.allCases[focusStyle.indexOfSelectedItem]
+        value.displaySeparatorStyle = AppSettings.DisplaySeparatorStyle.allCases[displaySeparatorStyle.indexOfSelectedItem]
+        value.displaySeparatorThickness = displaySeparatorThickness.selectedItem?.representedObject as? Double ?? value.displaySeparatorThickness
         value.windowScope = AppSettings.WindowScope.allCases[windowScope.indexOfSelectedItem]
         value.iconSize = iconSize.selectedItem?.tag ?? 16
         value.customWidth = min(1000, max(120, Int(width.doubleValue.rounded())))
@@ -352,6 +370,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     private func refreshPreview() {
         syncColorWells()
+        displaySeparatorThickness.isEnabled = value.displaySeparatorStyle != .none
+        numbers[\.displaySeparatorPadding]?.isEnabled = value.displaySeparatorStyle != .none
+        colors[\.displaySeparatorColor]?.isEnabled = value.displaySeparatorStyle != .none
         windowLayout.isEnabled = value.showLayout
         let floating = value.effectivePlacement != .menuBar
         numbers[\.floatingHeight]?.isEnabled = floating
@@ -416,6 +437,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         colors[\.focusedSpaceNameColor]?.color = value.spaceNameColor(focused: true, visible: true)
         colors[\.visibleSpaceNameColor]?.color = value.spaceNameColor(focused: false, visible: true)
         colors[\.inactiveSpaceNameColor]?.color = value.spaceNameColor(focused: false, visible: false)
+        colors[\.displaySeparatorColor]?.color = value.separatorColor
     }
 
     private static let example = try! Snapshot(spaces: Data("""
