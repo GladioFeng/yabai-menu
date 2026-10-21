@@ -2,7 +2,7 @@
 
 Spaces and window state in the native macOS menu bar or per-display bars. A small companion to [yabai](https://github.com/asmvik/yabai).
 
-[Website](https://gladiofeng.github.io/yabai-menu/) · [Download 1.0.0 RC · build 29](https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.29)
+[Website](https://gladiofeng.github.io/yabai-menu/) · [Download 1.0.0 RC · build 30](https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.30)
 
 - Show each Space with its app icons and distinguish focused, visible and inactive Spaces.
 - Click individual Spaces or windows directly. Right-click a Space to rename, move, create or delete it.
@@ -16,7 +16,7 @@ Spaces and window state in the native macOS menu bar or per-display bars. A smal
 
 <img src="docs/assets/settings.png" alt="Yabai Menu appearance settings with example Spaces preview" width="640">
 
-The screenshot uses example data from the earlier settings layout; build 24 removes the Presentation selector. Version 1.0.0 remains a release candidate. The [build 29 prerelease](https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.29) includes a universal ZIP and SHA-256 checksum. It uses ad-hoc signing and is not notarized by Apple; see the release notes before installing.
+The screenshot uses example data from the earlier settings layout; build 24 removes the Presentation selector. Version 1.0.0 remains a release candidate. The [build 30 prerelease](https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.30) includes a universal ZIP and SHA-256 checksum. It uses ad-hoc signing and is not notarized by Apple; see the release notes before installing.
 
 ## Requirements
 

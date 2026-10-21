@@ -10,16 +10,16 @@
   <meta property="og:description" content="Spaces, window controls, and app icons in a native macOS bar. An open-source companion for yabai.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://gladiofeng.github.io/yabai-menu/">
-  <meta property="og:image" content="https://gladiofeng.github.io/yabai-menu/assets/app-icon.png">
+  <meta property="og:image" content="https://gladiofeng.github.io/yabai-menu/assets/app-icon.png?v=30">
   <link rel="canonical" href="https://gladiofeng.github.io/yabai-menu/">
-  <link rel="icon" type="image/png" href="assets/app-icon.png">
+  <link rel="icon" type="image/png" href="assets/app-icon.png?v=30">
   <link rel="stylesheet" href="style.css">
   <script src="site.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header wrap">
-    <a class="brand" href="#" aria-label="Yabai Menu home"><img src="assets/app-icon.png" width="38" height="38" alt=""><span>Yabai Menu</span></a>
+    <a class="brand" href="#" aria-label="Yabai Menu home"><img src="assets/app-icon.png?v=30" width="38" height="38" alt=""><span>Yabai Menu</span></a>
     <nav aria-label="Main navigation">
       <a class="nav-detail" href="#features">Features</a>
       <a href="#install">Install</a>
@@ -34,15 +34,15 @@
         <h1 id="hero-title">Keep your<br>Spaces <span>in sight.</span></h1>
         <p class="hero-description">See each desktop, switch windows, and read their state from a native macOS bar. Put it in the menu bar or give each display a bar of its own.</p>
         <div class="hero-actions">
-          <a class="button button-dark" href="https://github.com/GladioFeng/yabai-menu/releases/download/v1.0.0-rc.29/Yabai-Menu-1.0.0-universal.zip"><span aria-hidden="true">↓</span> Download for macOS</a>
-          <a class="text-link" href="https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.29">Release notes <span aria-hidden="true">↗</span></a>
+          <a class="button button-dark" href="https://github.com/GladioFeng/yabai-menu/releases/download/v1.0.0-rc.30/Yabai-Menu-1.0.0-universal.zip"><span aria-hidden="true">↓</span> Download for macOS</a>
+          <a class="text-link" href="https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.30">Release notes <span aria-hidden="true">↗</span></a>
         </div>
-        <p class="download-meta">1.0.0 RC · build 29 <span>Intel + Apple Silicon</span></p>
+        <p class="download-meta">1.0.0 RC · build 30 <span>Intel + Apple Silicon</span></p>
         <p class="signing-note">Ad-hoc signed, not notarized. <a href="#install">Read the installation notes.</a></p>
       </div>
       <div class="hero-aside" aria-hidden="true">
         <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
-        <img src="assets/app-icon.png" width="176" height="176" alt="">
+        <img src="assets/app-icon.png?v=30" width="176" height="176" alt="">
         <span class="aside-label">A small bar.<br>A view of your workspace.</span>
       </div>
     </section>
@@ -94,7 +94,7 @@ $ yabai -m query --spaces
 
     <section id="install" class="install-section" aria-labelledby="install-title">
       <div class="wrap install-layout">
-        <div class="install-intro"><p class="eyebrow">Get started</p><h2 id="install-title">Add a view<br>of your workspace.</h2><p>One universal ZIP for Intel and Apple Silicon. This release candidate is intended for users with an existing yabai setup.</p><a class="button button-mint" href="https://github.com/GladioFeng/yabai-menu/releases/download/v1.0.0-rc.29/Yabai-Menu-1.0.0-universal.zip"><span aria-hidden="true">↓</span> Download build 29</a><div class="asset-links"><a href="https://github.com/GladioFeng/yabai-menu/releases/download/v1.0.0-rc.29/Yabai-Menu-1.0.0-universal.zip.sha256">SHA-256 checksum</a><a href="https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.29">All release assets <span aria-hidden="true">↗</span></a></div></div>
+        <div class="install-intro"><p class="eyebrow">Get started</p><h2 id="install-title">Add a view<br>of your workspace.</h2><p>One universal ZIP for Intel and Apple Silicon. This release candidate is intended for users with an existing yabai setup.</p><a class="button button-mint" href="https://github.com/GladioFeng/yabai-menu/releases/download/v1.0.0-rc.30/Yabai-Menu-1.0.0-universal.zip"><span aria-hidden="true">↓</span> Download build 30</a><div class="asset-links"><a href="https://github.com/GladioFeng/yabai-menu/releases/download/v1.0.0-rc.30/Yabai-Menu-1.0.0-universal.zip.sha256">SHA-256 checksum</a><a href="https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.30">All release assets <span aria-hidden="true">↗</span></a></div></div>
         <ol class="install-steps">
           <li><span>1</span><div><h3>Have yabai running</h3><p>Follow the <a href="https://github.com/asmvik/yabai/wiki">yabai setup guide</a>. Yabai Menu uses your existing installation and does not change its configuration files.</p></div></li>
           <li><span>2</span><div><h3>Unzip and move to Applications</h3><p>Quit an older copy first, then move <strong>Yabai Menu.app</strong> to <code>/Applications</code>. To check the download, put the ZIP and checksum in one folder and run:</p><pre class="checksum-command"><code>shasum -a 256 -c Yabai-Menu-1.0.0-universal.zip.sha256</code></pre></div></li>
@@ -102,7 +102,7 @@ $ yabai -m query --spaces
           <li><span>4</span><div><h3>Enable native window updates</h3><p>In <strong>Settings → Connection</strong>, choose <strong>Enable Native Window Updates…</strong>. Allow Yabai Menu in macOS Accessibility settings, then click <strong>Check Connection</strong>.</p></div></li>
         </ol>
       </div>
-      <div class="wrap support-note"><strong>Compatibility &amp; validation</strong><p>Built for macOS 13 and later; macOS 13 runtime verification is pending. Local running records cover Intel macOS 14.8.5 and Apple Silicon macOS 15.7.9. <a href="https://github.com/GladioFeng/yabai-menu/actions/runs/39535561423">Build 29 CI</a> passed noninteractive tests and universal builds on both architectures. Physical interaction and display-lifecycle checks remain incomplete.</p></div>
+      <div class="wrap support-note"><strong>Compatibility &amp; validation</strong><p>Built for macOS 13 and later; macOS 13 runtime verification is pending. Local running records cover Intel macOS 14.8.5 and Apple Silicon macOS 15.7.9. <a href="https://github.com/GladioFeng/yabai-menu/actions/runs/39535561423">Build 29 CI</a> passed noninteractive tests and universal builds on both architectures. Build 30 updates the app icon only. Physical interaction and display-lifecycle checks remain incomplete.</p></div>
     </section>
 
     <section class="faq wrap" aria-labelledby="faq-title"><div><p class="eyebrow">A few details</p><h2 id="faq-title">Before you settle in.</h2><p>For configuration, refresh hooks, and diagnostics, see the <a href="https://github.com/GladioFeng/yabai-menu#readme">full README</a>.</p></div><div class="faq-list">
@@ -113,6 +113,6 @@ $ yabai -m query --spaces
     </div></section>
   </main>
 
-  <footer class="site-footer wrap"><a class="brand" href="#"><img src="assets/app-icon.png" width="30" height="30" alt=""><span>Yabai Menu</span></a><p>By <a href="https://github.com/GladioFeng">GladioFeng</a> · <a href="https://github.com/GladioFeng/yabai-menu/blob/main/LICENSE">GPL-3.0-only</a><br>Presentation and event logic adapted from <a href="https://github.com/Jean-Tinland/a-bar">a-bar</a>. Window data and actions by <a href="https://github.com/asmvik/yabai">yabai</a>.</p><a class="footer-issue" href="https://github.com/GladioFeng/yabai-menu/issues">Report an issue <span aria-hidden="true">↗</span></a></footer>
+  <footer class="site-footer wrap"><a class="brand" href="#"><img src="assets/app-icon.png?v=30" width="30" height="30" alt=""><span>Yabai Menu</span></a><p>By <a href="https://github.com/GladioFeng">GladioFeng</a> · <a href="https://github.com/GladioFeng/yabai-menu/blob/main/LICENSE">GPL-3.0-only</a><br>Presentation and event logic adapted from <a href="https://github.com/Jean-Tinland/a-bar">a-bar</a>. Window data and actions by <a href="https://github.com/asmvik/yabai">yabai</a>.</p><a class="footer-issue" href="https://github.com/GladioFeng/yabai-menu/issues">Report an issue <span aria-hidden="true">↗</span></a></footer>
 </body>
 </html>

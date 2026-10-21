@@ -1,6 +1,6 @@
 # Release checks
 
-Version 1.0.0 remains a release candidate. [v1.0.0-rc.29](https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.29) publishes the universal build 29 archive and checksum. [Build 29 CI](https://github.com/GladioFeng/yabai-menu/actions/runs/39535561423) passed the noninteractive tests and universal builds on both architectures. The candidate uses ad-hoc signing; Developer ID signing and notarization remain pending.
+Version 1.0.0 remains a release candidate. [v1.0.0-rc.30](https://github.com/GladioFeng/yabai-menu/releases/tag/v1.0.0-rc.30) publishes the universal build 30 archive and checksum. [Build 29 CI](https://github.com/GladioFeng/yabai-menu/actions/runs/39535561423) passed the noninteractive tests and universal builds on both architectures. Build 30 updates the app icon without changing application logic. The candidate uses ad-hoc signing; Developer ID signing and notarization remain pending.
 
 1. Update the version and build number in `build.sh`, plus `CHANGELOG.md`.
 2. Run `swift test` on Intel and Apple Silicon. Run the opt-in UI tests in an interactive session and inspect the native light/dark previews.

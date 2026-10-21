@@ -17,16 +17,32 @@ let output = URL(fileURLWithPath: CommandLine.arguments[1])
 try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
 let image = NSImage(size: NSSize(width: 1024, height: 1024), flipped: false) { _ in
     let background = NSBezierPath(roundedRect: NSRect(x: 64, y: 64, width: 896, height: 896), xRadius: 200, yRadius: 200)
-    NSGradient(starting: NSColor(srgbRed: 0.09, green: 0.14, blue: 0.25, alpha: 1),
-               ending: NSColor(srgbRed: 0.19, green: 0.28, blue: 0.44, alpha: 1))!.draw(in: background, angle: 90)
+    NSGradient(starting: NSColor(srgbRed: 0.86, green: 0.94, blue: 0.90, alpha: 1),
+               ending: NSColor(srgbRed: 0.98, green: 0.99, blue: 0.97, alpha: 1))!.draw(in: background, angle: 90)
+    NSColor(srgbRed: 0.76, green: 0.87, blue: 0.81, alpha: 0.8).setStroke()
+    background.lineWidth = 4
+    background.stroke()
     for i in 0..<3 {
         let focused = i == 1
         let rect = NSRect(x: CGFloat(178 + i * 234), y: focused ? 296 : 336, width: 200, height: focused ? 432 : 352)
         let card = NSBezierPath(roundedRect: rect, xRadius: 30, yRadius: 30)
-        (focused ? NSColor(srgbRed: 0.31, green: 0.87, blue: 0.79, alpha: 1) : NSColor.white.withAlphaComponent(0.28)).setFill()
-        card.fill()
-        (focused ? NSColor(srgbRed: 0.08, green: 0.19, blue: 0.26, alpha: 1) : NSColor.white.withAlphaComponent(0.75)).setFill()
-        NSBezierPath(roundedRect: NSRect(x: rect.minX + 28, y: rect.maxY - 60, width: 144, height: 12), xRadius: 6, yRadius: 6).fill()
+        let bottom = focused ? NSColor(srgbRed: 0.34, green: 0.76, blue: 0.62, alpha: 1)
+                             : NSColor(srgbRed: 0.66, green: 0.82, blue: 0.89, alpha: 1)
+        let top = focused ? NSColor(srgbRed: 0.66, green: 0.90, blue: 0.79, alpha: 1)
+                          : NSColor(srgbRed: 0.82, green: 0.92, blue: 0.96, alpha: 1)
+        NSGraphicsContext.saveGraphicsState()
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor(srgbRed: 0.22, green: 0.47, blue: 0.39, alpha: 0.13)
+        shadow.shadowOffset = NSSize(width: 0, height: -10)
+        shadow.shadowBlurRadius = 18
+        shadow.set()
+        NSGradient(starting: bottom, ending: top)!.draw(in: card, angle: 90)
+        NSGraphicsContext.restoreGraphicsState()
+        NSColor.white.withAlphaComponent(0.7).setStroke()
+        card.lineWidth = 3
+        card.stroke()
+        (focused ? NSColor(srgbRed: 0.13, green: 0.43, blue: 0.34, alpha: 1) : NSColor(srgbRed: 0.31, green: 0.53, blue: 0.64, alpha: 1)).setFill()
+        NSBezierPath(roundedRect: NSRect(x: rect.minX + 28, y: rect.maxY - 62, width: 144, height: 14), xRadius: 7, yRadius: 7).fill()
     }
     return true
 }
