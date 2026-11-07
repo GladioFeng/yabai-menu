@@ -32,6 +32,14 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
     private var statusMenuItem: NSMenuItem?
     private var updatedMenuItem: NSMenuItem?
     var focusAction: ((Int?, Int?) -> Void)?
+    // Client renders wait while the left button is held, e.g. a just-focused Finder window being
+    // dragged. The bar keeps showing the state its click targets belong to; the newest state is
+    // applied once on release. Settings and screen changes still render immediately (force).
+    var leftButtonHeld: () -> Bool = { NSEvent.pressedMouseButtons & 1 != 0 }
+    private var heldRender: (snapshot: Snapshot?, status: ConnectionStatus)?
+    private var releaseMonitors: [Any] = []
+    private var releaseCheck: DispatchWorkItem?
+    var isHoldingRender: Bool { heldRender != nil }
 
     public override init() { super.init() }
     init(settings: AppSettings, defaults: UserDefaults = .standard, menuBarHosts: MenuBarHosts? = nil) {
@@ -71,7 +79,7 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
             focusAction = { [weak next] space, window in next?.focus(space: space, window: window) }
             next.onUpdate = { [weak self, weak next] snapshot, status in
                 guard let self, self.client === next else { return }
-                self.update(snapshot, status: status)
+                self.receive(snapshot, status: status)
             }
             next.start()
         }
@@ -82,6 +90,8 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
         menuAnchorObservers.forEach(NotificationCenter.default.removeObserver)
         modifierMonitors.forEach(NSEvent.removeMonitor)
         if let statusMouseMonitor { NSEvent.removeMonitor(statusMouseMonitor) }
+        releaseMonitors.forEach(NSEvent.removeMonitor)
+        releaseCheck?.cancel()
     }
 
     func setupItem() {
@@ -97,12 +107,8 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
             guard let self else { return }
             self.update(self.snapshot, status: self.status, force: true)
         }
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.autosaveName = "YabaiMenu"
-        item.button?.title = "Spaces …"
         fullMenu.delegate = self
-        item.menu = fullMenu
-        statusItem = item
+        ensureStatusItem()
         if statusMouseMonitor == nil {
             statusMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown]) { [weak self] event in
                 guard let self else { return event }
@@ -118,6 +124,26 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
             }
             installModifierMonitors()
         }
+    }
+
+    // A hidden NSStatusItem is still re-measured on every menu-bar metrics change, with synchronous
+    // WindowServer calls (seen in samples while clicking between windows). Standalone bars therefore
+    // remove it and recreate it only when the menu bar or a recovery entry needs it.
+    private func ensureStatusItem() {
+        guard statusItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.autosaveName = "YabaiMenu" // keeps the user's menu-bar position
+        item.isVisible = true // autosave may restore an older hidden state
+        item.button?.title = "Spaces …"
+        item.menu = fullMenu
+        statusItem = item
+    }
+
+    private func removeStatusItem() {
+        guard let item = statusItem else { return }
+        widgetBar?.removeFromSuperview(); widgetBar = nil
+        statusItem = nil
+        NSStatusBar.system.removeStatusItem(item)
     }
 
     private func installModifierMonitors() {
@@ -176,12 +202,57 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
         return nil
     }
 
+    func receive(_ snapshot: Snapshot?, status: ConnectionStatus) {
+        guard !quitting, !menuTracking, leftButtonHeld() else {
+            cancelHeldRender()
+            update(snapshot, status: status)
+            return
+        }
+        heldRender = (snapshot, status)
+        guard releaseMonitors.isEmpty else { return }
+        // Event-driven release; a mouse-up event proves the button is up even before AppKit's state catches up.
+        let release: (NSEvent) -> Void = { [weak self] _ in Task { @MainActor in self?.releaseHeldRender(released: true) } }
+        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp, handler: release) { releaseMonitors.append(monitor) }
+        if let monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp, handler: { release($0); return $0 }) {
+            releaseMonitors.append(monitor)
+        }
+        scheduleReleaseCheck()
+    }
+
+    func releaseHeldRender(released: Bool = false) {
+        guard let held = heldRender else { cancelHeldRender(); return }
+        guard released || !leftButtonHeld() else { return }
+        cancelHeldRender()
+        update(held.snapshot, status: held.status)
+    }
+
+    // Fallback for a release inside a modal tracking loop that no monitor sees; exists only while a render is held.
+    private func scheduleReleaseCheck() {
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.heldRender != nil else { return }
+            self.releaseCheck = nil
+            if self.leftButtonHeld() { self.scheduleReleaseCheck() } else { self.releaseHeldRender() }
+        }
+        releaseCheck?.cancel()
+        releaseCheck = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    private func cancelHeldRender() {
+        heldRender = nil
+        releaseMonitors.forEach(NSEvent.removeMonitor)
+        releaseMonitors.removeAll()
+        releaseCheck?.cancel()
+        releaseCheck = nil
+    }
+
     func update(_ snapshot: Snapshot?, status: ConnectionStatus, force: Bool = false) {
         let snapshotChanged = self.snapshot != snapshot
         let changed = snapshotChanged || self.status.needsAttention != status.needsAttention || self.status.mode != status.mode
         self.snapshot = snapshot
         self.status = status
         settingsWindow?.updateStatus(status, path: client?.path)
+        if settings.effectivePlacement == .menuBar || snapshot == nil || floatingBars.hosts.isEmpty { ensureStatusItem() }
         if settings.effectivePlacement == .menuBar, statusItem?.isVisible == false { statusItem?.isVisible = true }
         let automaticMenu: NSMenu? = settings.placement == .menuBar && snapshot != nil ? nil : fullMenu
         if statusItem?.menu !== automaticMenu { statusItem?.menu = automaticMenu }
@@ -190,8 +261,8 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
                 if settings.effectivePlacement != .menuBar {
                     menuBarHosts.close()
                     widgetBar?.removeFromSuperview(); widgetBar = nil
-                    statusItem?.length = NSStatusItem.variableLength
-                    statusItem?.button?.title = "Yabai"
+                    if statusItem?.length != NSStatusItem.variableLength { statusItem?.length = NSStatusItem.variableLength }
+                    if statusItem?.button?.title != "Yabai" { statusItem?.button?.title = "Yabai" }
                     floatingBars.update(snapshot, settings: settings, status: status, icon: icon,
                                         menu: { [weak self] in self?.barContextMenu($0) },
                                         select: { [weak self] in self?.selectBarTarget($0) })
@@ -220,8 +291,8 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
                     bar.menu = barContextMenu(.menu)
                     bar.configure(snapshot, settings: settings,
                                   enabled: status.mode == .live || status.mode == .limited, height: button.bounds.height, icon: icon)
-                    button.title = ""
-                    statusItem?.length = bar.frame.width
+                    if !button.title.isEmpty { button.title = "" }
+                    if statusItem?.length != bar.frame.width { statusItem?.length = bar.frame.width }
                     bar.frame.origin = NSPoint(x: 0, y: max(0, (button.bounds.height - bar.frame.height) / 2))
                     bar.autoresizingMask = [.minYMargin, .maxYMargin]
                     if widgetBar == nil { button.addSubview(bar); widgetBar = bar }
@@ -239,11 +310,11 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
                 settingsWindow?.updatePreview(snapshot) { [weak self] in self?.icon(for: $0) }
             }
         }
-        let showStatusItem = floatingBars.hosts.isEmpty
-        if statusItem?.isVisible != showStatusItem { statusItem?.isVisible = showStatusItem }
+        if floatingBars.hosts.isEmpty { ensureStatusItem() } else { removeStatusItem() }
         let current = snapshot?.focusedSpace.map { "Space \($0.index)" } ?? "No focused Space"
         let window = snapshot?.focusedWindow.map { "\($0.app), \($0.title), \($0.state)" } ?? "No focused window"
-        statusItem?.button?.setAccessibilityLabel("\(current). \(window). \(status.title). Open menu to switch.")
+        let label = "\(current). \(window). \(status.title). Open menu to switch."
+        if statusItem?.button?.accessibilityLabel() != label { statusItem?.button?.setAccessibilityLabel(label) }
         let tooltip = status.message ?? "\(current) · \(status.title). Click to switch Spaces or windows."
         if statusItem?.button?.toolTip != tooltip { statusItem?.button?.toolTip = tooltip }
         if menuTracking {
@@ -540,6 +611,7 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
 
     public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         quitting = true
+        cancelHeldRender()
         floatingBars.close()
         menuBarHosts.close()
         clientGeneration += 1

@@ -40,6 +40,7 @@ final class YabaiClient {
     private let windowEvents: YabaiWindowEvents?
     private let frontmostPID: () -> pid_t?
     private let readFocus: (Int32) -> Int?
+    private let pointerHeld: () -> Bool
     private let notification: String
     private let listenForABar: Bool
     private var tokens: [Int32] = []
@@ -50,6 +51,9 @@ final class YabaiClient {
     private var focusToken: Int32?
     private var lastActivatedPID: pid_t?
     private var moveRefreshTask: Task<Void, Never>?
+    private var focusRefreshTask: Task<Void, Never>?
+    private var lastMoveEvent: UInt64 = 0
+    static let moveQuietPeriod: UInt64 = 300_000_000
     enum RefreshScope: Equatable { case focus(Int?), windows, full }
     private var pendingRefresh: RefreshScope?
     private var requestRevision = 0
@@ -94,7 +98,8 @@ final class YabaiClient {
              var active: UInt32 = 0
              CGGetActiveDisplayList(0, nil, &active)
              return active > 0
-         }) {
+         },
+         pointerHeld: @escaping () -> Bool = { NSEvent.pressedMouseButtons & 1 != 0 }) {
         self.path = path
         self.run = run
         self.register = register ?? Self.registerNotification
@@ -102,6 +107,7 @@ final class YabaiClient {
         self.windowEvents = windowEvents
         self.frontmostPID = frontmostPID
         self.readFocus = readFocus
+        self.pointerHeld = pointerHeld
         self.notification = notification ?? Self.refreshName
         listenForABar = notification == nil
     }
@@ -166,7 +172,7 @@ final class YabaiClient {
         let pid = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier ?? frontmostPID()
         guard pid != lastActivatedPID else { return }
         lastActivatedPID = pid
-        refresh(.focus(nil))
+        scheduleFocusRefresh(nil)
     }
 
     func requestWindowObservationAccess() {
@@ -191,6 +197,7 @@ final class YabaiClient {
     }
 
     private func invalidateRefresh() {
+        focusRefreshTask?.cancel(); focusRefreshTask = nil
         moveRefreshTask?.cancel(); moveRefreshTask = nil
         refreshTask?.cancel(); refreshTask = nil
         pendingRefresh = nil
@@ -266,7 +273,7 @@ final class YabaiClient {
                 } else { notificationsReady = false; eventError = "Cannot receive display notifications." }
                 if let token = register(notification + ".window-focused", { [weak self] in
                     guard let self else { return }
-                    if let token = focusToken, let id = readFocus(token) { refresh(.focus(id)) }
+                    if let token = focusToken, let id = readFocus(token) { scheduleFocusRefresh(id) }
                     else { refresh() }
                 }) { focusToken = token; tokens.append(token) }
                 if let token = register(notification + ".window-title-changed", { [weak self] in self?.refresh(.windows) }) {
@@ -350,22 +357,58 @@ final class YabaiClient {
         else if pendingRefresh != .full, scope == .windows || pendingRefresh != .windows { pendingRefresh = scope }
     }
 
+    func scheduleFocusRefresh(_ id: Int?) {
+        guard !stopped, !displaySleeping else { return }
+        // Leave the first click/drag frames to the target app; stale responses must not publish.
+        requestRevision += 1
+        if let pendingRefresh, case .focus = pendingRefresh { self.pendingRefresh = nil }
+        focusRefreshTask?.cancel()
+        let current = generation
+        focusRefreshTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000)
+                // Click-then-drag: answering the query may make yabai read the dragged window over
+                // AX. Wait for the release; this check exists only while a focus refresh is pending
+                // and is cancelled with it by stop, sleep and full refresh.
+                while self?.pointerHeld() == true { try await Task.sleep(nanoseconds: 50_000_000) }
+            } catch { return }
+            guard let self, !stopped, !displaySleeping, current == generation, !Task.isCancelled else { return }
+            focusRefreshTask = nil
+            refresh(.focus(id))
+        }
+    }
+
+    // A drag emits a move event per frame: only stamp the time and keep one trailing timer,
+    // instead of cancelling and allocating a Task for every event on the main thread.
     func scheduleMoveRefresh() {
         guard !stopped, !displaySleeping else { return }
-        moveRefreshTask?.cancel()
+        lastMoveEvent = DispatchTime.now().uptimeNanoseconds
+        guard moveRefreshTask == nil else { return }
         let current = generation
         moveRefreshTask = Task { [weak self] in
-            do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
-            guard let self, !stopped, current == generation, !Task.isCancelled else { return }
+            var wait = Self.moveQuietPeriod
+            while true {
+                do { try await Task.sleep(nanoseconds: wait) } catch { return }
+                guard let self, !stopped, current == generation, !Task.isCancelled else { return }
+                let quiet = DispatchTime.now().uptimeNanoseconds &- lastMoveEvent
+                guard quiet < Self.moveQuietPeriod else { break }
+                wait = Self.moveQuietPeriod - quiet
+            }
+            guard let self else { return }
             moveRefreshTask = nil
-            refresh()
+            // Moves change frames only; the windows path falls back to full on Space/display/membership changes.
+            refresh(.windows)
         }
     }
 
     func refresh(_ requestedScope: RefreshScope = .full) {
         guard !stopped, !displaySleeping else { return }
         requestRevision += 1
-        if requestedScope == .full { moveRefreshTask?.cancel(); moveRefreshTask = nil; hasFullSnapshot = false }
+        if requestedScope == .full {
+            focusRefreshTask?.cancel(); focusRefreshTask = nil
+            moveRefreshTask?.cancel(); moveRefreshTask = nil
+            hasFullSnapshot = false
+        }
         enqueueRefresh(requestedScope)
         guard refreshTask == nil else { return }
         let current = generation
@@ -385,7 +428,7 @@ final class YabaiClient {
                         let data = try await run(path, ["-m", "query", "--windows", Self.windowFields, "--window"] + (id.map { [String($0)] } ?? []))
                         let window: Window = try await Self.decode(data)
                         guard !stopped, !displaySleeping, current == generation, !Task.isCancelled else { return }
-                        guard revision == requestRevision else { continue }
+                        guard revision == requestRevision || pendingRefresh == .focus(window.id) else { continue }
                         guard window.focused, window.pid == frontmostPID(), id == nil || window.id == id,
                               let patched = snapshot?.updatingFocus(window) else { enqueueRefresh(.full); continue }
                         next = patched; freshWindowID = window.id
@@ -408,7 +451,12 @@ final class YabaiClient {
                     guard let reconciled = await reconcileNativeTitles(next, startedAt: titleRevision,
                         freshWindowID: freshWindowID, pruneMissing: scope == .full, generation: current) else { return }
                     next = reconciled
-                    if case .focus = scope, revision != requestRevision { continue }
+                    if case .focus = scope, revision != requestRevision {
+                        // App activation and the matching window notification can describe the same click.
+                        guard let freshWindowID, pendingRefresh == .focus(freshWindowID),
+                              next.focusedWindow?.pid == frontmostPID() else { continue }
+                        pendingRefresh = nil
+                    }
                     if scope == .windows, pendingRefresh == .full { continue }
                     guard !stopped, !displaySleeping, current == generation, !Task.isCancelled else { return }
                     if scope == .full {

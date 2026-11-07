@@ -13,6 +13,8 @@ final class NativeRefreshTests: XCTestCase {
         var focusedDisplay = 1
         var single: [String: Any]?
         var failQueries = false
+        var holdNextFocus = false
+        var releaseFocus: CheckedContinuation<Void, Never>?
         var windows: [[String: Any]] = [10, 11].map { id in
             ["id": id, "pid": 123, "app": "Fixture", "title": "A", "space": 1, "display": 1,
              "subrole": "AXStandardWindow", "has-focus": id == 10, "is-visible": true,
@@ -42,7 +44,12 @@ final class NativeRefreshTests: XCTestCase {
             } else {
                 object = (1...2).map { ["id": $0 + 100, "index": $0, "uuid": "test-\($0)", "has-focus": focusedDisplay == $0] }
             }
-            return try JSONSerialization.data(withJSONObject: object)
+            let data = try JSONSerialization.data(withJSONObject: object)
+            if args.contains("--window"), holdNextFocus {
+                holdNextFocus = false
+                await withCheckedContinuation { releaseFocus = $0 }
+            }
+            return data
         }
     }
 
@@ -88,6 +95,176 @@ final class NativeRefreshTests: XCTestCase {
         XCTAssertEqual(backend.queryCalls, [["-m", "query", "--windows", YabaiClient.windowFields, "--window", "11"]])
         XCTAssertEqual(client.snapshot?.windows.filter(\.focused).count, 1)
         await client.stop()
+    }
+
+
+    func testOverlappingFocusQueriesReuseMatchingQuery() async {
+        let backend = Backend(); let client = client(backend)
+        await start(client)
+        backend.calls.removeAll()
+        backend.windows[0]["has-focus"] = false; backend.windows[1]["has-focus"] = true
+        backend.holdNextFocus = true
+        client.refresh(.focus(nil))
+        await waitFor { backend.releaseFocus != nil }
+        client.refresh(.focus(11))
+        backend.releaseFocus?.resume(); backend.releaseFocus = nil
+        await waitFor { client.snapshot?.focusedWindow?.id == 11 }
+        XCTAssertEqual(backend.queryCalls.count, 1, "One click must not query the same focused window twice")
+        XCTAssertEqual(client.snapshot?.windows.filter(\.focused).count, 1)
+        await client.stop()
+    }
+
+    func testOverlappingFocusPreservesNewerTargetsAndBroaderRefreshes() async {
+        for latest: YabaiClient.RefreshScope in [.focus(10), .focus(nil), .windows, .full] {
+            let backend = Backend(); let client = client(backend)
+            await start(client); backend.calls.removeAll()
+            backend.windows[0]["has-focus"] = false; backend.windows[1]["has-focus"] = true
+            backend.holdNextFocus = true
+            let before = client.status.lastUpdated
+            client.refresh(.focus(nil))
+            await waitFor { backend.releaseFocus != nil }
+            // The suspended response still describes window 11; the latest state is window 10.
+            backend.windows[0]["has-focus"] = true; backend.windows[1]["has-focus"] = false
+            client.refresh(latest)
+            backend.releaseFocus?.resume(); backend.releaseFocus = nil
+            await waitFor { client.status.lastUpdated != before }
+            XCTAssertEqual(client.snapshot?.focusedWindow?.id, 10, "\(latest)")
+            XCTAssertEqual(backend.queryCalls.count, latest == .full ? 4 : 2, "\(latest)")
+            if latest == .windows || latest == .full {
+                XCTAssertTrue(backend.queryCalls.contains { $0.contains("--windows") && !$0.contains("--window") })
+            }
+            await client.stop()
+        }
+    }
+
+    func testOverlappingFocusDuringTitleReadKeepsLatestRequest() async throws {
+        for latestID in [11, 10] {
+            let backend = Backend(), ax = YabaiWindowEventsTests.Backend()
+            let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+            var firstRead = true
+            let native = YabaiWindowEvents(trusted: { true }, subscribe: ax.subscribe, titleReader: { _ in
+                if firstRead {
+                    firstRead = false
+                    entered.signal()
+                    _ = release.wait(timeout: .now() + 2)
+                }
+                return "Native B"
+            })
+            let client = client(backend, events: native)
+            await start(client); try await observe(native, client: client, backend: ax)
+            ax.emit(.titleChanged(id: 11, pid: 123, element: AXUIElementCreateApplication(123), title: "Native B"))
+            await waitFor { client.snapshot?.windows.first { $0.id == 11 }?.title == "Native B" }
+            backend.calls.removeAll()
+            backend.windows[0]["has-focus"] = false; backend.windows[1]["has-focus"] = true
+            let before = client.status.lastUpdated
+            client.refresh(.focus(nil))
+            var reading = false
+            await waitFor {
+                if !reading { reading = entered.wait(timeout: .now()) == .success }
+                return reading
+            }
+            backend.windows[0]["has-focus"] = latestID == 10
+            backend.windows[1]["has-focus"] = latestID == 11
+            var published: [Int?] = []
+            client.onUpdate = { state, _ in published.append(state?.focusedWindow?.id) }
+            client.refresh(.focus(latestID))
+            release.signal()
+            await waitFor { client.status.lastUpdated != before }
+            XCTAssertEqual(client.snapshot?.focusedWindow?.id, latestID)
+            XCTAssertEqual(backend.queryCalls.count, latestID == 11 ? 1 : 2)
+            XCTAssertFalse(published.contains { $0 != latestID }, "A newer focus must not publish the old target")
+            await client.stop()
+        }
+    }
+
+    func testAutomaticFocusWaitsAndCoalescesClickNotifications() async {
+        let backend = Backend()
+        var handlers: [String: () -> Void] = [:]
+        var focusID = 10
+        let client = YabaiClient(path: "/fixture/yabai", notification: "test.delay",
+            run: backend.run, register: { name, handler in handlers[name] = handler; return 0 },
+            windowEvents: nil, frontmostPID: { backend.foreground }, readFocus: { _ in focusID })
+        await start(client); backend.calls.removeAll()
+        backend.windows[0]["has-focus"] = false; backend.windows[1]["has-focus"] = true
+        client.handleAppNotification(Notification(name: NSWorkspace.didActivateApplicationNotification))
+        handlers.first { $0.key.hasSuffix(".window-focused") }?.value()
+        focusID = 11
+        handlers.first { $0.key.hasSuffix(".window-focused") }?.value()
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertTrue(backend.queryCalls.isEmpty, "Automatic refresh must leave the first drag frames alone")
+        await waitFor { client.snapshot?.focusedWindow?.id == 11 }
+        XCTAssertEqual(backend.queryCalls.count, 1)
+        XCTAssertEqual(backend.queryCalls.first?.last, "11")
+        await client.stop()
+    }
+
+    func testHeldPointerDelaysFocusQueryUntilReleaseAndStopCancelsIt() async {
+        let backend = Backend()
+        var held = true
+        func make() -> YabaiClient {
+            YabaiClient(path: "/fixture/yabai", notification: "test.held.\(UUID().uuidString)", run: backend.run,
+                        register: { _, _ in 0 }, windowEvents: nil, frontmostPID: { backend.foreground },
+                        pointerHeld: { held })
+        }
+        let client = make()
+        await start(client); backend.calls.removeAll()
+        backend.windows[0]["has-focus"] = false; backend.windows[1]["has-focus"] = true
+        client.scheduleFocusRefresh(10)
+        client.scheduleFocusRefresh(11) // the newest click target wins
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertTrue(backend.queryCalls.isEmpty, "No focus query while the dragged window is held")
+        held = false
+        await waitFor { client.snapshot?.focusedWindow?.id == 11 }
+        XCTAssertEqual(backend.queryCalls, [["-m", "query", "--windows", YabaiClient.windowFields, "--window", "11"]])
+        await client.stop()
+        // Quitting during a held drag leaves no waiting task behind.
+        held = true
+        let quitting = make()
+        await start(quitting); backend.calls.removeAll()
+        quitting.scheduleFocusRefresh(11)
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        await quitting.stop()
+        held = false
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertTrue(backend.queryCalls.isEmpty)
+    }
+
+    func testDeferredFocusDiscardsOlderQueuedFocus() async {
+        let backend = Backend(); let client = client(backend)
+        await start(client); backend.calls.removeAll()
+        backend.holdNextFocus = true
+        client.refresh(.focus(10))
+        await waitFor { backend.releaseFocus != nil }
+        client.refresh(.focus(10))
+        backend.windows[0]["has-focus"] = false; backend.windows[1]["has-focus"] = true
+        var published: [Int?] = []
+        client.onUpdate = { snapshot, _ in published.append(snapshot?.focusedWindow?.id) }
+        client.scheduleFocusRefresh(11)
+        backend.releaseFocus?.resume(); backend.releaseFocus = nil
+        await waitFor { client.snapshot?.focusedWindow?.id == 11 }
+        XCTAssertFalse(published.contains { $0 != 11 })
+        XCTAssertEqual(backend.queryCalls.count, 2)
+        await client.stop()
+    }
+
+    func testDeferredFocusCancelsOnStopSleepAndFullRefresh() async {
+        for action in ["stop", "sleep", "full"] {
+            let backend = Backend(); let client = client(backend)
+            await start(client); backend.calls.removeAll()
+            client.scheduleFocusRefresh(11)
+            switch action {
+            case "stop": await client.stop()
+            case "sleep": client.screenChanged(sleeping: true)
+            default:
+                let before = client.status.lastUpdated
+                client.refresh()
+                await waitFor { client.status.lastUpdated != before }
+            }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            XCTAssertFalse(backend.queryCalls.contains { $0.contains("--window") }, action)
+            XCTAssertEqual(backend.queryCalls.count, action == "full" ? 3 : 0, action)
+            await client.stop()
+        }
     }
 
     func testUncertainFocusFallsBackExactlyOnce() async {
@@ -264,6 +441,23 @@ final class NativeRefreshTests: XCTestCase {
         await waitFor { client.snapshot?.windows.count == 3 }
         XCTAssertEqual(backend.queryCalls.filter { $0.contains("--windows") }.count, 2)
         XCTAssertEqual(backend.queryCalls.filter { $0.contains("--spaces") }.count, 1)
+        await client.stop()
+    }
+
+    func testMoveRefreshReadsWindowsOnlyUnlessSpaceChanges() async {
+        let backend = Backend(); let client = client(backend)
+        await start(client); backend.calls.removeAll()
+        backend.windows[0]["frame"] = ["x": 500.0]
+        client.scheduleMoveRefresh()
+        await waitFor { client.snapshot?.windows.first { $0.id == 10 }?.frame.x == 500 }
+        XCTAssertEqual(backend.queryCalls, [["-m", "query", "--windows", YabaiClient.windowFields]])
+        // Dragging to another Space changes topology: the windows path must escalate to a full snapshot.
+        backend.calls.removeAll()
+        backend.windows[0]["space"] = 2; backend.windows[0]["display"] = 2
+        client.scheduleMoveRefresh()
+        await waitFor { client.snapshot?.windows.first { $0.id == 10 }?.space == 2 }
+        XCTAssertEqual(backend.queryCalls.filter { $0.contains("--spaces") }.count, 1)
+        XCTAssertEqual(client.snapshot?.spaces.first { $0.index == 2 }?.windows?.contains(10), true)
         await client.stop()
     }
 

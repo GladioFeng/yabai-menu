@@ -182,8 +182,10 @@ final class MenuTests: XCTestCase {
             bar.configure(try state(1), settings: settings, enabled: false) { _ in nil }
             XCTAssertEqual(bar.subviews.map(ObjectIdentifier.init), buttons.map(ObjectIdentifier.init))
             XCTAssertTrue(bar.subviews.compactMap { $0 as? NSButton }.allSatisfy { !$0.isEnabled })
+            (buttons[0] as? NSButton)?.isHighlighted = true
             bar.configure(try snapshot([], spaces: [space(3, focus: true)]), settings: settings) { _ in nil }
             XCTAssertFalse(bar.subviews.contains { view in buttons.contains { $0 === view } }, "Changed targets must not repurpose a tracked button")
+            XCTAssertEqual(bar.cells.map(\.target), [.space(13)])
         }
     }
 
@@ -288,6 +290,51 @@ final class MenuTests: XCTestCase {
     }
 
     @MainActor
+    func testHeldPointerDefersClientRenderAndAppliesNewestOnRelease() throws {
+        _ = NSApplication.shared
+        var settings = AppSettings()
+        settings.density = .custom; settings.customWidth = 1000; settings.windowScope = .focused
+        let controller = MenuBarController(settings: settings)
+        controller.setupItem()
+        defer { if let item = controller.statusItem { NSStatusBar.system.removeStatusItem(item) } }
+        var held = false
+        controller.leftButtonHeld = { held }
+        let live = ConnectionStatus(mode: .live)
+        func focused(_ id: Int) throws -> Snapshot { try snapshot([1, 2, 3].map { window($0, focus: $0 == id) }) }
+        controller.receive(try focused(1), status: live)
+        let bar = try XCTUnwrap(controller.widgetBar)
+        let shown = bar.cells
+        XCTAssertEqual(shown.last?.target, .window(1, nil))
+        held = true
+        controller.receive(try focused(2), status: live)
+        controller.receive(try focused(3), status: live)
+        XCTAssertEqual(bar.cells, shown, "The bar must not redraw while the pointer is held")
+        XCTAssertTrue(controller.isHoldingRender)
+        // Displayed buttons still click the targets they show.
+        var chosen: Int?
+        controller.focusAction = { _, window in chosen = window }
+        (bar.subviews.last as? NSButton)?.performClick(nil)
+        XCTAssertEqual(chosen, 1)
+        controller.releaseHeldRender()
+        XCTAssertEqual(bar.cells, shown, "A probe that still reports the button down keeps waiting")
+        held = false
+        controller.releaseHeldRender()
+        XCTAssertFalse(controller.isHoldingRender)
+        XCTAssertEqual(bar.cells.last?.target, .window(3, nil), "Release applies only the newest state")
+        // Forced renders (settings, screens) and unheld updates stay immediate, with nothing left waiting.
+        held = true
+        controller.update(try focused(2), status: live, force: true)
+        XCTAssertEqual(bar.cells.last?.target, .window(2, nil))
+        controller.receive(try focused(1), status: live)
+        held = false
+        controller.receive(try focused(3), status: live)
+        XCTAssertFalse(controller.isHoldingRender)
+        XCTAssertEqual(bar.cells.last?.target, .window(3, nil))
+        controller.releaseHeldRender(released: true)
+        XCTAssertEqual(bar.cells.last?.target, .window(3, nil), "A stale held state cannot overwrite a newer render")
+    }
+
+    @MainActor
     func testStandaloneBarsHideTheStatusItemAndKeepRecoveryAccess() throws {
         guard ProcessInfo.processInfo.environment["YABAI_MENU_UI_TESTS"] == "1" else { throw XCTSkip("AppKit session required") }
         _ = NSApplication.shared
@@ -300,19 +347,21 @@ final class MenuTests: XCTestCase {
             var settings = AppSettings(); settings.placement = placement; settings.spaceScope = .all
             let controller = MenuBarController(settings: settings)
             controller.setupItem()
-            let item = try XCTUnwrap(controller.statusItem)
-            defer { controller.floatingBars.close(); NSStatusBar.system.removeStatusItem(item) }
-            if placement == .menuBar { item.isVisible = false }
+            defer { controller.floatingBars.close(); if let item = controller.statusItem { NSStatusBar.system.removeStatusItem(item) } }
+            if placement == .menuBar { controller.statusItem?.isVisible = false }
             controller.update(state, status: ConnectionStatus(mode: .live))
-            XCTAssertEqual(item.isVisible, placement == .menuBar)
+            // Standalone bars remove the item entirely so AppKit stops re-measuring it.
+            XCTAssertEqual(controller.statusItem != nil, placement == .menuBar)
+            XCTAssertEqual(controller.statusItem?.isVisible ?? false, placement == .menuBar)
             if placement != .menuBar { XCTAssertFalse(controller.floatingBars.hosts.isEmpty) }
             let menu = controller.barContextMenu(.menu)
             XCTAssertTrue(menu.items.contains { $0.title == "Settings…" })
             XCTAssertTrue(menu.items.contains { $0.title == "Quit Yabai Menu" })
             controller.update(nil, status: ConnectionStatus(mode: .disconnected))
-            XCTAssertTrue(item.isVisible, "Keep a recovery entry when no bar can be shown")
+            XCTAssertEqual(controller.statusItem?.isVisible, true, "Keep a recovery entry when no bar can be shown")
+            XCTAssertTrue(controller.statusItem?.menu === controller.fullMenu)
             controller.update(state, status: ConnectionStatus(mode: .live))
-            XCTAssertEqual(item.isVisible, placement == .menuBar)
+            XCTAssertEqual(controller.statusItem != nil, placement == .menuBar)
         }
     }
 
@@ -801,6 +850,7 @@ final class MenuTests: XCTestCase {
             XCTAssertTrue(bar.hitTest(NSPoint(x: button.frame.midX, y: button.frame.midY)) === button)
             button.performClick(nil)
             XCTAssertEqual(selected, .window(500, nil))
+            button.isHighlighted = true // still being tracked when the refresh lands
             bar.configure(try snapshot([]), settings: settings) { _ in image }
             selected = nil
             button.performClick(nil)

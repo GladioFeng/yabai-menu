@@ -177,13 +177,17 @@ final class ClientTests: XCTestCase {
         client.start(observeSystem: false)
         await waitUntil { client.status.mode == .live }
         let before = fake.commands.filter { $0.contains("--windows") }.count
+        let topology = fake.commands.filter { $0.contains("--spaces") || $0.contains("--displays") }.count
         for _ in 0..<4 {
-            client.scheduleMoveRefresh()
+            for _ in 0..<20 { client.scheduleMoveRefresh() } // per-frame events within one burst
             try? await Task.sleep(nanoseconds: 150_000_000)
         }
         XCTAssertEqual(fake.commands.filter { $0.contains("--windows") }.count, before)
         await waitUntil { fake.commands.filter { $0.contains("--windows") }.count > before }
+        try? await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertEqual(fake.commands.filter { $0.contains("--windows") }.count, before + 1)
+        XCTAssertEqual(fake.commands.filter { $0.contains("--spaces") || $0.contains("--displays") }.count, topology,
+                       "A frame-only move must not re-read Spaces or displays")
         XCTAssertFalse(fake.commands.contains { $0.contains("event=window_moved") || $0.contains("event=window_resized") || $0.contains("event=window_title_changed") })
         client.scheduleMoveRefresh()
         await client.stop()

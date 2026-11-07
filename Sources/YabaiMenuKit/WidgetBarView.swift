@@ -276,22 +276,29 @@ final class WidgetBarView: NSView {
         let appearanceChanged = self.settings != settings
         let monochromeChanged = self.settings.monochrome != settings.monochrome
         let oldBackgrounds = backgrounds, oldSeparators = displaySeparators
-        let buttons = subviews.compactMap { $0 as? WidgetButton }
-        let reuse = buttons.count == layout.cells.count && zip(buttons, layout.cells).allSatisfy {
-            $0.cellInfo.group == $1.group && $0.cellInfo.target == $1.target
+        var buttons = subviews.compactMap { $0 as? WidgetButton }
+        // Reuse buttons by position: clicks read cellInfo at action time, and icons reload only
+        // when a slot's PID changes. A button AppKit is still tracking keeps its old target, so
+        // that rare case rebuilds instead of retargeting the pressed view.
+        if buttons.contains(where: { $0.isTracking || $0.isHighlighted }) {
+            subviews.forEach { $0.removeFromSuperview() }
+            buttons = []
         }
-        if !reuse { subviews.forEach { $0.removeFromSuperview() } }
+        for extra in buttons.dropFirst(layout.cells.count) { extra.removeFromSuperview() }
+        buttons = Array(buttons.prefix(layout.cells.count))
+        let reuse = buttons.count == layout.cells.count
         self.settings = settings
         renderedState = layout.state
         cells = layout.cells
         backgrounds = layout.backgrounds
         displaySeparators = layout.separators
         for (index, cell) in cells.enumerated() {
-            let button = reuse ? buttons[index] : WidgetButton(frame: layout.frames[index])
+            let reused = index < buttons.count
+            let button = reused ? buttons[index] : WidgetButton(frame: layout.frames[index])
             let previous = button.cellInfo
             let textFont = cell.focus || cell.currentSpace ? layout.boldFont : layout.regularFont
             let enabled = layout.state.enabled || cell.target == .menu
-            let redraw = !reuse || appearanceChanged || previous?.hasSameDrawing(as: cell) != true
+            let redraw = !reused || appearanceChanged || previous?.hasSameDrawing(as: cell) != true
                 || button.frame != layout.frames[index] || button.textFont != textFont
                 || button.isEnabled != enabled
             button.cellInfo = cell
@@ -300,10 +307,10 @@ final class WidgetBarView: NSView {
                 button.textFont = textFont
                 button.iconSize = min(CGFloat(settings.iconSize), height - 4)
                 button.layoutSize = min(CGFloat(settings.layoutIconSize), height - 4)
-                if !reuse || monochromeChanged || previous?.window?.pid != cell.window?.pid {
+                if !reused || monochromeChanged || previous?.window?.pid != cell.window?.pid {
                     button.appIcon = cell.window.flatMap(icon)
                 }
-                if !reuse || previous?.symbol != cell.symbol {
+                if !reused || previous?.symbol != cell.symbol {
                     button.stateIcon = cell.symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: cell.tooltip) }
                 }
                 button.underline = cell.currentSpace && settings.focusStyle == .underline
@@ -313,7 +320,7 @@ final class WidgetBarView: NSView {
                 if button.isEnabled != enabled { button.isEnabled = enabled }
                 button.needsDisplay = true
             }
-            if !reuse {
+            if !reused {
                 button.owner = self
                 button.tag = index
                 button.target = self
@@ -325,7 +332,7 @@ final class WidgetBarView: NSView {
                 button.toolTip = tooltip
                 button.setAccessibilityLabel(tooltip)
             }
-            if !reuse { addSubview(button) }
+            if !reused { addSubview(button) }
         }
         let resized = frame.size != layout.size
         if resized {
@@ -389,6 +396,14 @@ private final class WidgetButton: NSButton {
     var iconSize: CGFloat = 16
     var layoutSize: CGFloat = 16
     var underline = false
+    // NSButton runs its own tracking loop inside mouseDown; refreshes can still land during it,
+    // including after the pointer leaves and the highlight turns off.
+    private(set) var isTracking = false
+    override func mouseDown(with event: NSEvent) {
+        isTracking = true
+        defer { isTracking = false }
+        super.mouseDown(with: event)
+    }
     override func menu(for event: NSEvent) -> NSMenu? {
         guard let target = cellInfo?.target else { return super.menu(for: event) }
         return owner?.contextMenu?(target) ?? super.menu(for: event)

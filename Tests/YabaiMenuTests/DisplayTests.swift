@@ -708,6 +708,62 @@ final class DisplayTests: XCTestCase {
         XCTAssertTrue(bars.hosts.isEmpty)
     }
 
+
+    func testFloatingRefreshSharesMenusAndPreservesWindowOptions() throws {
+        _ = NSApplication.shared
+        let screen = BarScreen(id: 101, index: 1, key: "test",
+            visibleFrame: NSRect(x: 100, y: 100, width: 1000, height: 700),
+            screenFrame: NSRect(x: 100, y: 100, width: 1000, height: 724))
+        let bars = FloatingBars(screens: { _ in [screen] })
+        defer { bars.close() }
+        var settings = AppSettings()
+        settings.placement = .floating
+        settings.floatingAboveFullscreen = true
+        settings.colorPreset = .catppuccinMocha
+        var menus = 0
+        func update(_ snapshot: Snapshot) {
+            bars.update(snapshot, settings: settings, status: ConnectionStatus(mode: .suspended),
+                icon: { _ in nil }, menu: { _ in
+                    menus += 1
+                    let menu = NSMenu()
+                    let lock = menu.addItem(withTitle: "Lock", action: nil, keyEquivalent: "")
+                    lock.state = settings.floatingLocked ? .on : .off
+                    return menu
+                }, select: { _ in })
+        }
+        update(try state())
+        let host = try XCTUnwrap(bars.hosts[101])
+        let states = try (0..<200).map { try state(focused: $0 % 2 == 0 ? 1 : 4, x: Double($0)) }
+        menus = 0
+        let start = ProcessInfo.processInfo.systemUptime
+        for snapshot in states { update(snapshot) }
+        let elapsed = (ProcessInfo.processInfo.systemUptime - start) * 1000
+        print("FLOATING_REFRESH_BENCH updates=200 menus=\(menus) elapsed_ms=\(elapsed)")
+        XCTAssertEqual(menus, 200, "One context menu per host/update, shared by all three surfaces")
+        XCTAssertTrue(bars.hosts[101] === host)
+        XCTAssertTrue(host.handle.menu === host.bar.menu && host.bar.menu === host.panel.contentView?.menu)
+        XCTAssertTrue(host.panel.collectionBehavior.contains(.fullScreenAuxiliary))
+        XCTAssertEqual(host.panel.appearance?.name, .darkAqua)
+        settings.floatingAboveFullscreen = false
+        settings.colorPreset = .catppuccinLatte
+        settings.floatingOpacity = 70
+        settings.floatingLocked = true
+        update(try state())
+        XCTAssertFalse(host.panel.collectionBehavior.contains(.fullScreenAuxiliary))
+        XCTAssertEqual(host.panel.appearance?.name, .aqua)
+        XCTAssertEqual(host.panel.alphaValue, 0.7, accuracy: 0.001)
+        XCTAssertEqual(host.handle.menu?.items.first?.state, .on)
+        settings.floatingAboveFullscreen = true
+        settings.colorPreset = .system
+        settings.floatingOpacity = 100
+        settings.floatingLocked = false
+        update(try state())
+        XCTAssertTrue(host.panel.collectionBehavior.contains(.fullScreenAuxiliary))
+        XCTAssertNil(host.panel.appearance)
+        XCTAssertEqual(host.panel.alphaValue, 1)
+        XCTAssertEqual(host.bar.menu?.items.first?.state, .off)
+    }
+
     func testGeometryRefreshPerformanceDoesNotLoadIconsOrRebuildButtons() throws {
         _ = NSApplication.shared
         let bar = WidgetBarView()
@@ -722,6 +778,58 @@ final class DisplayTests: XCTestCase {
         XCTAssertEqual(bar.subviews.map(ObjectIdentifier.init), original)
         XCTAssertEqual(requests, count)
         print("GEOMETRY_BENCH updates=200 rebuilds=0 icon_loads=0 elapsed_ms=\(elapsed * 1000)")
+    }
+
+    // Focus moving between two Finder windows changes deduplicated targets but not the button count.
+    func testFocusChangeReusesButtonsWithoutTargetOrIconMixups() throws {
+        _ = NSApplication.shared
+        func finder(focused: Int) throws -> Snapshot {
+            let windows: [[String: Any]] = [(201, 500, "Finder"), (202, 500, "Finder"), (203, 600, "Notes")].map {
+                ["id": $0.0, "pid": $0.1, "app": $0.2, "title": "W\($0.0)", "display": 1, "space": 1,
+                 "has-focus": $0.0 == focused, "is-floating": false, "is-sticky": false, "is-hidden": false,
+                 "is-minimized": false, "stack-index": 0, "frame": ["x": Double($0.0)]]
+            }
+            let spaces: [[String: Any]] = [["id": 11, "index": 1, "label": "", "display": 1, "type": "bsp",
+                                            "has-focus": true, "is-visible": true]]
+            return try Snapshot(spaces: JSONSerialization.data(withJSONObject: spaces),
+                                windows: JSONSerialization.data(withJSONObject: windows),
+                                displays: Data(#"[{"id":101,"index":1,"uuid":"main"}]"#.utf8))
+        }
+        var settings = AppSettings()
+        settings.windowScope = .focused; settings.hideDuplicateApps = true
+        settings.showCreateSpace = false; settings.density = .custom; settings.customWidth = 1000
+        let images = [Int32(500): NSImage(size: NSSize(width: 16, height: 16)), 600: NSImage(size: NSSize(width: 16, height: 16))]
+        var loads: [Int32] = []
+        let icon: (Window) -> NSImage? = { loads.append($0.pid); return images[$0.pid] }
+        let bar = WidgetBarView()
+        var selected: BarTarget?
+        bar.onSelect = { selected = $0 }
+        bar.configure(try finder(focused: 201), settings: settings, display: 1, icon: icon)
+        let original = bar.subviews.map(ObjectIdentifier.init)
+        loads.removeAll()
+        // Same app, different window: targets change, buttons and icons stay.
+        bar.configure(try finder(focused: 202), settings: settings, display: 1, icon: icon)
+        XCTAssertEqual(bar.subviews.map(ObjectIdentifier.init), original, "A focus change must not rebuild every button")
+        XCTAssertEqual(loads, [], "Same-PID cells must keep their cached icon")
+        XCTAssertTrue(bar.cells.contains { $0.target == .window(202, 11) && !$0.isProcess })
+        XCTAssertTrue(bar.cells.contains { $0.target == .window(202, nil) && $0.isProcess })
+        for (index, cell) in bar.cells.enumerated() {
+            (bar.subviews[index] as? NSButton)?.performClick(nil)
+            XCTAssertEqual(selected, cell.target, "Reused button \(index) must click its new target")
+            XCTAssertTrue(bar.subviews[index].toolTip?.hasPrefix(cell.tooltip) == true)
+        }
+        // Different app in the process slot: only that slot asks for the new PID's icon.
+        bar.configure(try finder(focused: 203), settings: settings, display: 1, icon: icon)
+        XCTAssertEqual(bar.subviews.map(ObjectIdentifier.init), original)
+        XCTAssertEqual(loads, [600])
+        XCTAssertEqual(bar.cells.last?.window?.pid, 600)
+        // A button still tracking the mouse keeps its old target; rebuild instead of retargeting it.
+        let pressed = try XCTUnwrap(bar.subviews.last as? NSButton)
+        pressed.isHighlighted = true
+        bar.configure(try finder(focused: 201), settings: settings, display: 1, icon: icon)
+        XCTAssertFalse(bar.subviews.contains { $0 === pressed })
+        pressed.performClick(nil)
+        XCTAssertEqual(selected, .window(203, nil))
     }
 
     func testHandleUsesQueuedEventCoordinatesAndFinalMouseUpPosition() throws {

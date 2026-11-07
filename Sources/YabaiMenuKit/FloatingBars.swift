@@ -114,9 +114,11 @@ final class FloatingBars {
             host.bar.contextMenu = menu
             let handleWidth: CGFloat = settings.effectivePlacement == .floating ? 18 : 0
             let horizontal = CGFloat(settings.barHorizontalPadding), vertical = CGFloat(settings.barVerticalPadding)
-            host.panel.appearance = settings.colorPreset.appearance
+            let appearance = settings.colorPreset.appearance
+            if host.panel.appearance?.name != appearance?.name { host.panel.appearance = appearance }
             host.backdrop.configure(settings)
-            host.panel.hasShadow = settings.barShadow && settings.barBackdrop != .none
+            let shadow = settings.barShadow && settings.barBackdrop != .none
+            if host.panel.hasShadow != shadow { host.panel.hasShadow = shadow }
             var bounded = settings
             bounded.density = .custom
             bounded.customWidth = Int(min(settings.width, max(40, screen.visibleFrame.width - 16 - handleWidth - horizontal * 2)))
@@ -125,9 +127,10 @@ final class FloatingBars {
                                height: CGFloat(settings.floatingHeight), display: screen.index, icon: icon)
             host.handle.isHidden = handleWidth == 0
             host.handle.locked = settings.floatingLocked
-            host.handle.menu = menu(.menu)
-            host.bar.menu = menu(.menu)
-            host.panel.contentView?.menu = menu(.menu)
+            let contextMenu = menu(.menu)
+            host.handle.menu = contextMenu
+            host.bar.menu = contextMenu
+            host.panel.contentView?.menu = contextMenu
             host.handle.didMove = { [weak host] in host?.updateLevel(floating: true) }
             host.handle.didDrag = { [weak self, weak host] in
                 guard let self, let host else { return }
@@ -141,9 +144,12 @@ final class FloatingBars {
                 defaults.set(positions, forKey: "floatingPositions")
             }
             host.handle.didEndInteraction = { [weak self] in self?.onDragFinished?() }
-            host.panel.alphaValue = CGFloat(settings.floatingOpacity) / 100
-            host.panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-            if settings.floatingAboveFullscreen { host.panel.collectionBehavior.insert(.fullScreenAuxiliary) }
+            let opacity = CGFloat(settings.floatingOpacity) / 100
+            if host.panel.alphaValue != opacity { host.panel.alphaValue = opacity }
+            var behavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+            if settings.floatingAboveFullscreen { behavior.insert(.fullScreenAuxiliary) }
+            // Avoid removing and restoring fullscreen membership on every focus update.
+            if host.panel.collectionBehavior != behavior { host.panel.collectionBehavior = behavior }
             let size = NSSize(width: host.bar.frame.width + handleWidth + horizontal * 2, height: host.bar.frame.height + vertical * 2)
             let position = settings.effectivePlacement == .docked ? NSPoint(x: 0.5, y: 1) : host.position
             let frame = screen.frame(size: size, position: position, includingMenuBar: settings.placement == .floating && host.includesMenuBar)

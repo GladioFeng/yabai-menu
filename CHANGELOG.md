@@ -2,6 +2,18 @@
 
 ## 1.0.0 — release candidate
 
+- Build 37: remove the hidden status item while docked or floating bars are shown, and recreate it with the same saved position when the menu bar or a recovery entry needs it. Sampling showed AppKit re-measuring the hidden item with synchronous WindowServer calls on every menu-bar metrics change.
+
+- Build 36: while the left mouse button is held (for example clicking a window and dragging it at once), hold the automatic focus query and bar redraw until release, then apply only the newest state. Coalesce per-frame window-move events into one trailing timer and re-read only windows after a move, escalating to a full snapshot when Space, display or membership changed. Skip re-setting an unchanged status-item accessibility label.
+
+- Build 35: reuse bar buttons by position when focus changes their targets, so switching between windows of one app no longer rebuilds every button, tooltip and cursor area on each display. Icons reload only when a slot's app changes; a button being pressed is never retargeted.
+
+- Build 34: coalesce automatic focus notifications for 100 ms before querying, leaving initial click/drag frames to the focused app. Cancel deferred work on shutdown, sleep and full refresh; keep explicit window actions immediate.
+
+- Build 33: skip unchanged panel and status-item properties during refreshes, preserve fullscreen membership without toggling it, and reuse one common context menu per bar.
+
+- Build 32: reuse a matching in-flight focus query when app activation and window-focus notifications describe the same click. Preserve newer focus targets, full/window refresh priorities and title reconciliation.
+
 - Build 31: replace the app icon with the selected tiled-window design in jade, pistachio and sky blue, with a transparent rounded outline and all standard macOS icon sizes.
 
 - Build 30: refresh the app icon with a light ivory background, soft blue windows and a mint focused window. Keep the three-workspace symbol and all standard macOS icon sizes.
