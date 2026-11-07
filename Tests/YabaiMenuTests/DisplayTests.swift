@@ -780,6 +780,19 @@ final class DisplayTests: XCTestCase {
         print("GEOMETRY_BENCH updates=200 rebuilds=0 icon_loads=0 elapsed_ms=\(elapsed * 1000)")
     }
 
+    func testLocalFocusSwitchesWindowSpaceAndDisplayOrRefusesToGuess() throws {
+        let snapshot = try state(focused: 4) // window 104 on display 2 is focused
+        let next = try XCTUnwrap(snapshot.locallyFocusing(id: 101, pid: 1001))
+        XCTAssertEqual(next.focusedWindow?.id, 101)
+        XCTAssertEqual(next.windows.filter(\.focused).map(\.id), [101])
+        XCTAssertEqual(next.focusedSpace?.index, 1)
+        XCTAssertEqual(next.displays.filter { $0.focused == true }.map(\.index), [1])
+        XCTAssertEqual(next.spaces.filter(\.visible).map(\.index), [1, 4], "Visibility never changes locally")
+        XCTAssertNil(snapshot.locallyFocusing(id: 101, pid: 9999), "Owner must match the frontmost app")
+        XCTAssertNil(snapshot.locallyFocusing(id: 555, pid: 1001), "Unknown windows need yabai")
+        XCTAssertNil(try state(focused: 4, visible: [2, 4]).locallyFocusing(id: 101, pid: 1001), "Off-screen Space needs yabai")
+    }
+
     // Focus moving between two Finder windows changes deduplicated targets but not the button count.
     func testFocusChangeReusesButtonsWithoutTargetOrIconMixups() throws {
         _ = NSApplication.shared

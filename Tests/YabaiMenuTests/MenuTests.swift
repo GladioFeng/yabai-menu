@@ -290,51 +290,6 @@ final class MenuTests: XCTestCase {
     }
 
     @MainActor
-    func testHeldPointerDefersClientRenderAndAppliesNewestOnRelease() throws {
-        _ = NSApplication.shared
-        var settings = AppSettings()
-        settings.density = .custom; settings.customWidth = 1000; settings.windowScope = .focused
-        let controller = MenuBarController(settings: settings)
-        controller.setupItem()
-        defer { if let item = controller.statusItem { NSStatusBar.system.removeStatusItem(item) } }
-        var held = false
-        controller.leftButtonHeld = { held }
-        let live = ConnectionStatus(mode: .live)
-        func focused(_ id: Int) throws -> Snapshot { try snapshot([1, 2, 3].map { window($0, focus: $0 == id) }) }
-        controller.receive(try focused(1), status: live)
-        let bar = try XCTUnwrap(controller.widgetBar)
-        let shown = bar.cells
-        XCTAssertEqual(shown.last?.target, .window(1, nil))
-        held = true
-        controller.receive(try focused(2), status: live)
-        controller.receive(try focused(3), status: live)
-        XCTAssertEqual(bar.cells, shown, "The bar must not redraw while the pointer is held")
-        XCTAssertTrue(controller.isHoldingRender)
-        // Displayed buttons still click the targets they show.
-        var chosen: Int?
-        controller.focusAction = { _, window in chosen = window }
-        (bar.subviews.last as? NSButton)?.performClick(nil)
-        XCTAssertEqual(chosen, 1)
-        controller.releaseHeldRender()
-        XCTAssertEqual(bar.cells, shown, "A probe that still reports the button down keeps waiting")
-        held = false
-        controller.releaseHeldRender()
-        XCTAssertFalse(controller.isHoldingRender)
-        XCTAssertEqual(bar.cells.last?.target, .window(3, nil), "Release applies only the newest state")
-        // Forced renders (settings, screens) and unheld updates stay immediate, with nothing left waiting.
-        held = true
-        controller.update(try focused(2), status: live, force: true)
-        XCTAssertEqual(bar.cells.last?.target, .window(2, nil))
-        controller.receive(try focused(1), status: live)
-        held = false
-        controller.receive(try focused(3), status: live)
-        XCTAssertFalse(controller.isHoldingRender)
-        XCTAssertEqual(bar.cells.last?.target, .window(3, nil))
-        controller.releaseHeldRender(released: true)
-        XCTAssertEqual(bar.cells.last?.target, .window(3, nil), "A stale held state cannot overwrite a newer render")
-    }
-
-    @MainActor
     func testStandaloneBarsHideTheStatusItemAndKeepRecoveryAccess() throws {
         guard ProcessInfo.processInfo.environment["YABAI_MENU_UI_TESTS"] == "1" else { throw XCTSkip("AppKit session required") }
         _ = NSApplication.shared

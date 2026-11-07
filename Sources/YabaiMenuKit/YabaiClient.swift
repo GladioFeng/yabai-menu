@@ -40,7 +40,6 @@ final class YabaiClient {
     private let windowEvents: YabaiWindowEvents?
     private let frontmostPID: () -> pid_t?
     private let readFocus: (Int32) -> Int?
-    private let pointerHeld: () -> Bool
     private let notification: String
     private let listenForABar: Bool
     private var tokens: [Int32] = []
@@ -50,10 +49,16 @@ final class YabaiClient {
     private var observesWindows = false
     private var focusToken: Int32?
     private var lastActivatedPID: pid_t?
-    private var moveRefreshTask: Task<Void, Never>?
-    private var focusRefreshTask: Task<Void, Never>?
-    private var lastMoveEvent: UInt64 = 0
-    static let moveQuietPeriod: UInt64 = 300_000_000
+    private var quietTask: Task<Void, Never>?
+    private var lastActivity: UInt64 = 0
+    // Latest concrete window ID, whether it came from AX, and whether an app activated meanwhile.
+    private struct DeferredFocus { var id: Int?; var native = false; var activation = false }
+    private var deferredFocus: DeferredFocus?
+    private var deferredScope: RefreshScope?
+    static let quietPeriod: UInt64 = 300_000_000
+    static let maxDeferral: UInt64 = 3_000_000_000
+    // Covered by AX focus events and NSWorkspace Space notifications when Accessibility is available.
+    static let nativeFocusEvents = ["window_focused", "display_changed", "space_changed"]
     enum RefreshScope: Equatable { case focus(Int?), windows, full }
     private var pendingRefresh: RefreshScope?
     private var requestRevision = 0
@@ -98,8 +103,7 @@ final class YabaiClient {
              var active: UInt32 = 0
              CGGetActiveDisplayList(0, nil, &active)
              return active > 0
-         },
-         pointerHeld: @escaping () -> Bool = { NSEvent.pressedMouseButtons & 1 != 0 }) {
+         }) {
         self.path = path
         self.run = run
         self.register = register ?? Self.registerNotification
@@ -107,7 +111,6 @@ final class YabaiClient {
         self.windowEvents = windowEvents
         self.frontmostPID = frontmostPID
         self.readFocus = readFocus
-        self.pointerHeld = pointerHeld
         self.notification = notification ?? Self.refreshName
         listenForABar = notification == nil
     }
@@ -147,12 +150,14 @@ final class YabaiClient {
             guard let self, !stopped, !displaySleeping else { return }
             switch event {
             case .moved: scheduleMoveRefresh()
+            case .focused(let id, _): scheduleFocusRefresh(id, native: true)
             case .titleChanged(let id, let pid, let element, let title): applyNativeTitle(id: id, pid: pid, element: element, title: title)
-            case .resynchronized: refresh()
+            case .resynchronized: scheduleRefresh()
             case .permissionLost:
                 subscriptionsConfirmed = false
                 nativeTitles.removeAll()
-                refresh()
+                // Re-register yabai's focus/display/Space signals that AX events had replaced.
+                reconnect(force: true)
             case .subscriptionStatus(let complete):
                 let wasFailed = subscriptionsFailed
                 subscriptionsConfirmed = true
@@ -197,8 +202,8 @@ final class YabaiClient {
     }
 
     private func invalidateRefresh() {
-        focusRefreshTask?.cancel(); focusRefreshTask = nil
-        moveRefreshTask?.cancel(); moveRefreshTask = nil
+        quietTask?.cancel(); quietTask = nil
+        deferredFocus = nil; deferredScope = nil
         refreshTask?.cancel(); refreshTask = nil
         pendingRefresh = nil
         hasFullSnapshot = false
@@ -274,7 +279,7 @@ final class YabaiClient {
                 if let token = register(notification + ".window-focused", { [weak self] in
                     guard let self else { return }
                     if let token = focusToken, let id = readFocus(token) { scheduleFocusRefresh(id) }
-                    else { refresh() }
+                    else { scheduleRefresh() }
                 }) { focusToken = token; tokens.append(token) }
                 if let token = register(notification + ".window-title-changed", { [weak self] in self?.refresh(.windows) }) {
                     tokens.append(token)
@@ -290,14 +295,17 @@ final class YabaiClient {
                 let signals = try JSONDecoder().decode([Signal].self, from: data)
                 // Old per-move signals fork a shell for every mouse movement; only retire our own labels.
                 let titleFallback = windowEvents?.supportsTitles == false
-                for event in ["window_moved", "window_resized"] + (titleFallback ? [] : ["window_title_changed"]) {
+                // With AX focus events, yabai no longer spawns a shell on every focus/display/Space change.
+                let replaced = observesWindows && windowEvents?.supportsTitles == true && windowEvents?.isTrusted == true
+                    ? Self.nativeFocusEvents : []
+                for event in ["window_moved", "window_resized"] + (titleFallback ? [] : ["window_title_changed"]) + replaced {
                     let label = "yabai-menu-\(event)"
                     if signals.contains(where: { $0.label == label }) {
                         guard !stopped, current == generation else { throw CancellationError() }
                         _ = try await run(path, ["-m", "signal", "--remove", label])
                     }
                 }
-                for event in Self.events + (titleFallback ? ["window_title_changed"] : []) {
+                for event in Self.events.filter({ !replaced.contains($0) }) + (titleFallback ? ["window_title_changed"] : []) {
                     let channel = Self.topologyEvents.contains(event) ? notification + ".displays" : notification
                     let action: String
                     if event == "window_focused", focusToken != nil {
@@ -341,7 +349,8 @@ final class YabaiClient {
         }
     }
 
-    func scheduleRefresh() {
+    // Explicit bar actions refresh promptly instead of waiting for interaction to go quiet.
+    func refreshAfterAction() {
         guard !stopped, debounce == nil else { return }
         let work = DispatchWorkItem { [weak self] in
             self?.debounce = nil
@@ -357,56 +366,91 @@ final class YabaiClient {
         else if pendingRefresh != .full, scope == .windows || pendingRefresh != .windows { pendingRefresh = scope }
     }
 
-    func scheduleFocusRefresh(_ id: Int?) {
+    // Automatic events: yabai signals, workspace notifications, AX focus/moves and the a-bar hook.
+    func scheduleRefresh() { deferRefresh(.full) }
+    /// `native`: the ID came from an AX focus event. Apps also report panels, popovers and other
+    /// windows yabai does not manage; when such an ID cannot be applied locally it is ignored
+    /// instead of costing yabai a focus query plus a full refresh. Real new windows and Space
+    /// switches still arrive through yabai's window signals and NSWorkspace.
+    func scheduleFocusRefresh(_ id: Int?, native: Bool = false) {
         guard !stopped, !displaySleeping else { return }
-        // Leave the first click/drag frames to the target app; stale responses must not publish.
-        requestRevision += 1
-        if let pendingRefresh, case .focus = pendingRefresh { self.pendingRefresh = nil }
-        focusRefreshTask?.cancel()
-        let current = generation
-        focusRefreshTask = Task { [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: 100_000_000)
-                // Click-then-drag: answering the query may make yabai read the dragged window over
-                // AX. Wait for the release; this check exists only while a focus refresh is pending
-                // and is cancelled with it by stop, sleep and full refresh.
-                while self?.pointerHeld() == true { try await Task.sleep(nanoseconds: 50_000_000) }
-            } catch { return }
-            guard let self, !stopped, !displaySleeping, current == generation, !Task.isCancelled else { return }
-            focusRefreshTask = nil
-            refresh(.focus(id))
+        var focus = deferredFocus ?? DeferredFocus()
+        if let id { focus.id = id; focus.native = native } else { focus.activation = true }
+        deferredFocus = focus
+        deferRefresh(.focus(id))
+    }
+    func scheduleMoveRefresh() { deferRefresh(.windows) }
+
+    /// Every automatic event only stamps the time and records what changed. One timer runs the
+    /// merged work after `quietPeriod` without events; a drag's per-frame move events keep pushing
+    /// it out, so clicks and drags never share time with queries, layout or drawing. Events that
+    /// never stop (e.g. a window animating) cannot postpone it past `maxDeferral`. The pointer
+    /// itself is never tracked.
+    func deferRefresh(_ scope: RefreshScope) {
+        guard !stopped, !displaySleeping else { return }
+        let now = DispatchTime.now().uptimeNanoseconds
+        lastActivity = now
+        if case .focus = scope {
+            // A newer focus invalidates in-flight focus answers.
+            requestRevision += 1
+            if case .focus? = pendingRefresh { pendingRefresh = nil }
+            if deferredFocus == nil { deferredFocus = DeferredFocus() }
+        } else if deferredScope != .full {
+            deferredScope = scope
+        }
+        guard quietTask == nil else { return }
+        let current = generation, first = now
+        quietTask = Task { [weak self] in
+            var wait = Self.quietPeriod
+            while true {
+                do { try await Task.sleep(nanoseconds: wait) } catch { return }
+                guard let self, !stopped, !displaySleeping, current == generation, !Task.isCancelled else { return }
+                let now = DispatchTime.now().uptimeNanoseconds
+                let quiet = now &- lastActivity, waited = now &- first
+                if quiet >= Self.quietPeriod || waited >= Self.maxDeferral { break }
+                wait = min(Self.quietPeriod - quiet, Self.maxDeferral - waited)
+            }
+            guard let self else { return }
+            quietTask = nil
+            let focus = deferredFocus, scope = deferredScope
+            deferredFocus = nil; deferredScope = nil
+            if scope == .full { refresh(); return }
+            if let focus { await resolveFocus(focus, generation: current) }
+            if let scope, !stopped, !displaySleeping, current == generation { refresh(scope) }
         }
     }
 
-    // A drag emits a move event per frame: only stamp the time and keep one trailing timer,
-    // instead of cancelling and allocating a Task for every event on the main thread.
-    func scheduleMoveRefresh() {
-        guard !stopped, !displaySleeping else { return }
-        lastMoveEvent = DispatchTime.now().uptimeNanoseconds
-        guard moveRefreshTask == nil else { return }
-        let current = generation
-        moveRefreshTask = Task { [weak self] in
-            var wait = Self.moveQuietPeriod
-            while true {
-                do { try await Task.sleep(nanoseconds: wait) } catch { return }
-                guard let self, !stopped, current == generation, !Task.isCancelled else { return }
-                let quiet = DispatchTime.now().uptimeNanoseconds &- lastMoveEvent
-                guard quiet < Self.moveQuietPeriod else { break }
-                wait = Self.moveQuietPeriod - quiet
-            }
-            guard let self else { return }
-            moveRefreshTask = nil
-            // Moves change frames only; the windows path falls back to full on Space/display/membership changes.
-            refresh(.windows)
+    /// Applies focus to the current snapshot without a yabai query, across displays too, and asks
+    /// yabai only when the snapshot cannot prove the result for a yabai or activation event.
+    private func resolveFocus(_ focus: DeferredFocus, generation current: Int) async {
+        func apply(_ target: Int, owner front: pid_t) -> Bool {
+            guard hasFullSnapshot, refreshTask == nil, pendingRefresh == nil, frontmostPID() == front,
+                  let next = snapshot?.locallyFocusing(id: target, pid: front) else { return false }
+            requestRevision += 1
+            if snapshot != next { snapshot = next; status.lastUpdated = Date(); publish() }
+            return true
         }
+        if let front = frontmostPID() {
+            if let id = focus.id, apply(id, owner: front) { return }
+            // App activation: ask the app once, on the AX thread, now that interaction has gone quiet.
+            if focus.activation, let read = await windowEvents?.readFocusedWindow(pid: front) {
+                guard !stopped, !displaySleeping, current == generation else { return }
+                if apply(read, owner: front) { return }
+            }
+        }
+        guard !stopped, !displaySleeping, current == generation else { return }
+        // An unmanaged AX window alone changes nothing yabai would report.
+        if focus.native && !focus.activation { return }
+        refresh(.focus(focus.activation ? nil : focus.id))
     }
 
     func refresh(_ requestedScope: RefreshScope = .full) {
         guard !stopped, !displaySleeping else { return }
         requestRevision += 1
         if requestedScope == .full {
-            focusRefreshTask?.cancel(); focusRefreshTask = nil
-            moveRefreshTask?.cancel(); moveRefreshTask = nil
+            // A full snapshot covers every deferred event recorded so far.
+            quietTask?.cancel(); quietTask = nil
+            deferredFocus = nil; deferredScope = nil
             hasFullSnapshot = false
         }
         enqueueRefresh(requestedScope)
@@ -418,7 +462,6 @@ final class YabaiClient {
                 guard !stopped, !displaySleeping, current == generation, !Task.isCancelled else { return }
                 pendingRefresh = nil
                 let scope = hasFullSnapshot ? requested : .full
-                if scope == .full { moveRefreshTask?.cancel(); moveRefreshTask = nil }
                 let revision = requestRevision, titleRevision = nativeTitleRevision
                 do {
                     var next: Snapshot
@@ -495,10 +538,10 @@ final class YabaiClient {
         guard !stopped, !displaySleeping, id > 0, id <= Int(UInt32.max), pid > 0 else { return }
         let matches = snapshot?.windows.indices.filter { snapshot!.windows[$0].id == id } ?? []
         guard matches.count <= 1, matches.first.map({ snapshot!.windows[$0].pid == pid }) ?? true else { return }
-        guard let title else { nativeTitles.removeValue(forKey: id); refresh(.windows); return }
+        guard let title else { nativeTitles.removeValue(forKey: id); scheduleMoveRefresh(); return }
         nativeTitleRevision += 1
         nativeTitles[id] = NativeTitle(pid: pid, element: element, title: title, revision: nativeTitleRevision)
-        guard let index = matches.first else { refresh(); return }
+        guard let index = matches.first else { scheduleRefresh(); return }
         var next = snapshot!
         next.windows[index] = next.windows[index].replacingTitle(title)
         if snapshot != next { snapshot = next; publish() }
@@ -579,7 +622,7 @@ final class YabaiClient {
                     if !stopped, current == generation { status.actionError = "The selected action failed. \(error.localizedDescription)" }
                 }
                 // A display focus may have succeeded even if the following mutation failed.
-                if !stopped, !displaySleeping, current == generation { scheduleRefresh() }
+                if !stopped, !displaySleeping, current == generation { refreshAfterAction() }
             }
             actionTask = nil
             status.isSwitching = false

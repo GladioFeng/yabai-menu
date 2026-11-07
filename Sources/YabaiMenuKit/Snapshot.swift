@@ -5,7 +5,7 @@ struct Display: Decodable, Equatable {
     let id: UInt32
     let index: Int
     let uuid: String?
-    let focused: Bool?
+    fileprivate(set) var focused: Bool?
     enum CodingKeys: String, CodingKey { case id, index, uuid; case focused = "has-focus" }
 }
 
@@ -15,7 +15,7 @@ struct Space: Decodable, Equatable {
     let label: String
     let display: Int
     let type: String
-    let focused: Bool
+    fileprivate(set) var focused: Bool
     let visible: Bool
     let windows: [Int]?
     var name: String { label.isEmpty ? String(index) : label }
@@ -56,8 +56,8 @@ struct Window: Decodable, Equatable {
 }
 
 struct Snapshot: Equatable {
-    let displays: [Display]
-    let spaces: [Space]
+    private(set) var displays: [Display]
+    private(set) var spaces: [Space]
     var windows: [Window]
 
     init(spaces: Data, windows: Data, displays: Data? = nil, excludingPID: Int32? = nil) throws {
@@ -108,6 +108,27 @@ struct Snapshot: Equatable {
         var next = self
         for i in next.windows.indices { next.windows[i].setFocus(false) }
         next.windows[index] = window
+        return next
+    }
+
+    /// Moves focus to a window already on screen without asking yabai, including across displays.
+    /// Returns nil when the snapshot cannot prove the result (unknown, hidden or off-screen window).
+    func locallyFocusing(id: Int, pid: Int32) -> Snapshot? {
+        guard let index = windows.firstIndex(where: { $0.id == id }),
+              windows.filter({ $0.id == id }).count == 1 else { return nil }
+        let window = windows[index]
+        guard window.pid == pid, !window.hidden, !window.minimized, window.visible != false else { return nil }
+        guard let display = window.display ?? spaces.first(where: { $0.index == window.space })?.display,
+              displays.isEmpty || displays.contains(where: { $0.index == display }) else { return nil }
+        // A sticky window shows on the visible Space of its display; others need their own Space on screen.
+        let space = window.sticky
+            ? spaces.first { $0.display == display && $0.visible }
+            : spaces.first { $0.index == window.space && $0.windows?.contains(id) != false }
+        guard let space, space.visible, space.display == display else { return nil }
+        var next = self
+        for i in next.windows.indices { next.windows[i].setFocus(next.windows[i].id == id) }
+        for i in next.spaces.indices { next.spaces[i].focused = next.spaces[i].index == space.index }
+        for i in next.displays.indices { next.displays[i].focused = next.displays[i].index == display }
         return next
     }
 

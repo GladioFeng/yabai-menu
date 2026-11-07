@@ -196,6 +196,32 @@ final class ClientTests: XCTestCase {
         XCTAssertEqual(fake.commands.count, stopped)
     }
 
+    func testNativeFocusRetiresYabaiFocusDisplayAndSpaceSignals() async {
+        let fake = FakeYabai()
+        fake.signals = #"[{"label":"yabai-menu-window_focused","event":"window_focused","action":"old"},{"label":"yabai-menu-space_changed","event":"space_changed","action":"old"}]"#
+        let events = YabaiWindowEvents(trusted: { true }, subscribe: { _, _ in {} }, supportsTitles: true)
+        let client = YabaiClient(path: "/fake/yabai", notification: "test.yabai-menu.\(UUID().uuidString)", run: fake.run,
+                                 register: { _, _ in 0 }, windowEvents: events, displaysAwake: { true })
+        client.startWindowObservation()
+        client.start(observeSystem: false)
+        await waitUntil { client.status.mode == .live }
+        let added = fake.commands.filter { $0.contains("--add") }.compactMap { $0.first { $0.hasPrefix("event=") } }
+        for event in YabaiClient.nativeFocusEvents {
+            XCTAssertFalse(added.contains("event=\(event)"), "\(event) must not make yabai spawn a shell per change")
+        }
+        XCTAssertTrue(added.contains("event=window_created"))
+        let removed = fake.commands.filter { $0.contains("--remove") }.map { $0.last! }
+        XCTAssertTrue(removed.contains("yabai-menu-window_focused"))
+        XCTAssertTrue(removed.contains("yabai-menu-space_changed"))
+        await client.stop()
+        // Without Accessibility the yabai signals stay as the fallback.
+        let plain = FakeYabai(), fallback = makeClient(plain)
+        fallback.start(observeSystem: false)
+        await waitUntil { fallback.status.mode == .live }
+        XCTAssertTrue(plain.commands.contains { $0.contains("event=window_focused") })
+        await fallback.stop()
+    }
+
     func testStopDuringRegistrationCannotAddLateSignals() async {
         let fake = FakeYabai()
         fake.holdRegistration = true

@@ -32,14 +32,6 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
     private var statusMenuItem: NSMenuItem?
     private var updatedMenuItem: NSMenuItem?
     var focusAction: ((Int?, Int?) -> Void)?
-    // Client renders wait while the left button is held, e.g. a just-focused Finder window being
-    // dragged. The bar keeps showing the state its click targets belong to; the newest state is
-    // applied once on release. Settings and screen changes still render immediately (force).
-    var leftButtonHeld: () -> Bool = { NSEvent.pressedMouseButtons & 1 != 0 }
-    private var heldRender: (snapshot: Snapshot?, status: ConnectionStatus)?
-    private var releaseMonitors: [Any] = []
-    private var releaseCheck: DispatchWorkItem?
-    var isHoldingRender: Bool { heldRender != nil }
 
     public override init() { super.init() }
     init(settings: AppSettings, defaults: UserDefaults = .standard, menuBarHosts: MenuBarHosts? = nil) {
@@ -79,7 +71,7 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
             focusAction = { [weak next] space, window in next?.focus(space: space, window: window) }
             next.onUpdate = { [weak self, weak next] snapshot, status in
                 guard let self, self.client === next else { return }
-                self.receive(snapshot, status: status)
+                self.update(snapshot, status: status)
             }
             next.start()
         }
@@ -90,8 +82,6 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
         menuAnchorObservers.forEach(NotificationCenter.default.removeObserver)
         modifierMonitors.forEach(NSEvent.removeMonitor)
         if let statusMouseMonitor { NSEvent.removeMonitor(statusMouseMonitor) }
-        releaseMonitors.forEach(NSEvent.removeMonitor)
-        releaseCheck?.cancel()
     }
 
     func setupItem() {
@@ -200,50 +190,6 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
         default: return event
         }
         return nil
-    }
-
-    func receive(_ snapshot: Snapshot?, status: ConnectionStatus) {
-        guard !quitting, !menuTracking, leftButtonHeld() else {
-            cancelHeldRender()
-            update(snapshot, status: status)
-            return
-        }
-        heldRender = (snapshot, status)
-        guard releaseMonitors.isEmpty else { return }
-        // Event-driven release; a mouse-up event proves the button is up even before AppKit's state catches up.
-        let release: (NSEvent) -> Void = { [weak self] _ in Task { @MainActor in self?.releaseHeldRender(released: true) } }
-        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp, handler: release) { releaseMonitors.append(monitor) }
-        if let monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp, handler: { release($0); return $0 }) {
-            releaseMonitors.append(monitor)
-        }
-        scheduleReleaseCheck()
-    }
-
-    func releaseHeldRender(released: Bool = false) {
-        guard let held = heldRender else { cancelHeldRender(); return }
-        guard released || !leftButtonHeld() else { return }
-        cancelHeldRender()
-        update(held.snapshot, status: held.status)
-    }
-
-    // Fallback for a release inside a modal tracking loop that no monitor sees; exists only while a render is held.
-    private func scheduleReleaseCheck() {
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.heldRender != nil else { return }
-            self.releaseCheck = nil
-            if self.leftButtonHeld() { self.scheduleReleaseCheck() } else { self.releaseHeldRender() }
-        }
-        releaseCheck?.cancel()
-        releaseCheck = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
-    }
-
-    private func cancelHeldRender() {
-        heldRender = nil
-        releaseMonitors.forEach(NSEvent.removeMonitor)
-        releaseMonitors.removeAll()
-        releaseCheck?.cancel()
-        releaseCheck = nil
     }
 
     func update(_ snapshot: Snapshot?, status: ConnectionStatus, force: Bool = false) {
@@ -611,7 +557,6 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
 
     public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         quitting = true
-        cancelHeldRender()
         floatingBars.close()
         menuBarHosts.close()
         clientGeneration += 1

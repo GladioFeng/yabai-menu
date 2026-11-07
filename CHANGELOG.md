@@ -2,6 +2,12 @@
 
 ## 1.0.0 — release candidate
 
+- Build 40: cap deferred refreshes at 3 seconds so continuously moving windows cannot postpone them indefinitely, and keep an app activation when its Accessibility focus event names a window yabai does not manage.
+
+- Build 39: ignore Accessibility focus events for windows yabai does not manage (panels, popovers) instead of falling back to a yabai focus query and full refresh.
+
+- Build 38: apply focus changes locally from Accessibility focus events, including across displays, instead of querying yabai; fall back to yabai only when the snapshot cannot prove the result. Merge every automatic refresh into one quiet-period timer that drags keep postponing, and stop tracking the mouse. With Accessibility available, stop registering yabai focus, display and Space signals so yabai no longer spawns a shell on each change.
+
 - Build 37: remove the hidden status item while docked or floating bars are shown, and recreate it with the same saved position when the menu bar or a recovery entry needs it. Sampling showed AppKit re-measuring the hidden item with synchronous WindowServer calls on every menu-bar metrics change.
 
 - Build 36: while the left mouse button is held (for example clicking a window and dragging it at once), hold the automatic focus query and bar redraw until release, then apply only the newest state. Coalesce per-frame window-move events into one trailing timer and re-read only windows after a move, escalating to a full snapshot when Space, display or membership changed. Skip re-setting an unchanged status-item accessibility label.

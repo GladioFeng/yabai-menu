@@ -12,6 +12,7 @@ import Darwin
 final class YabaiWindowEvents {
     enum Event {
         case moved
+        case focused(id: Int, pid: pid_t)
         case titleChanged(id: Int, pid: pid_t, element: AXUIElement, title: String?)
         case resynchronized
         case permissionLost
@@ -82,6 +83,26 @@ final class YabaiWindowEvents {
             }
         }
         return current == generation ? title : nil
+    }
+
+    /// Reads an app's focused window on the AX thread; used only after interaction has gone quiet.
+    @MainActor
+    func readFocusedWindow(pid: pid_t) async -> Int? {
+        guard let worker else { return nil }
+        let current = generation
+        let id: Int? = await withCheckedContinuation { (continuation: CheckedContinuation<Int?, Never>) in
+            worker.perform { _ in
+                let application = AXUIElementCreateApplication(pid)
+                AXUIElementSetMessagingTimeout(application, 0.2)
+                var value: CFTypeRef?
+                guard AXUIElementCopyAttributeValue(application, kAXFocusedWindowAttribute as CFString, &value) == .success,
+                      let value, CFGetTypeID(value) == AXUIElementGetTypeID() else {
+                    continuation.resume(returning: nil); return
+                }
+                continuation.resume(returning: YabaiWindowEvents.windowID(for: value as! AXUIElement))
+            }
+        }
+        return current == generation ? id : nil
     }
 
     func stop() {
@@ -182,6 +203,8 @@ final class YabaiWindowEvents {
             switch event {
             case .moved, .resynchronized, .permissionLost, .subscriptionStatus:
                 handler(event)
+            case .focused(_, let owner):
+                if owner == pid { handler(event) }
             case .titleChanged(_, let owner, let element, let title):
                 guard owner == pid else { return }
                 guard title != nil else {
@@ -231,6 +254,13 @@ final class YabaiWindowEvents {
             }
             return nil // A partial subscription must be retried by the existing service check.
         }
+        // Optional: focus falls back to NSWorkspace activation and yabai if an app refuses it.
+        if nativeWindowIDReader != nil {
+            let focus = kAXFocusedWindowChangedNotification
+            let result = AXObserverAddNotification(observer, application, focus as CFString,
+                                                   Unmanaged.passUnretained(subscription).toOpaque())
+            if result == .success || result == .notificationAlreadyRegistered { subscription.names.append(focus) }
+        }
         CFRunLoopAddSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(observer), .defaultMode)
         return {
             CFRunLoopSourceInvalidate(AXObserverGetRunLoopSource(observer))
@@ -254,6 +284,11 @@ final class YabaiWindowEvents {
         func receive(_ element: AXUIElement, _ notification: CFString) {
             if notification as String == kAXWindowMovedNotification {
                 handler(.moved)
+                return
+            }
+            if notification as String == kAXFocusedWindowChangedNotification {
+                // The window ID alone is enough; no further AX reads while the app may be starting a drag.
+                if let id = YabaiWindowEvents.windowID(for: element) { handler(.focused(id: id, pid: pid)) }
                 return
             }
             guard let id = YabaiWindowEvents.windowID(for: element) else {

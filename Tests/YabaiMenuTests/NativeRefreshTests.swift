@@ -81,7 +81,7 @@ final class NativeRefreshTests: XCTestCase {
         await waitFor { backend.registered == [123] }
     }
 
-    func testFocusNotificationQueriesOneWindowAndClearsPreviousFocus() async {
+    func testFocusNotificationPatchesLocallyAndClearsPreviousFocus() async {
         let backend = Backend()
         var handlers: [String: () -> Void] = [:]
         let client = YabaiClient(path: "/fixture/yabai", notification: "test.native.\(UUID().uuidString)", run: backend.run,
@@ -92,7 +92,7 @@ final class NativeRefreshTests: XCTestCase {
         backend.windows[0]["has-focus"] = false; backend.windows[1]["has-focus"] = true
         handlers.first { $0.key.hasSuffix(".window-focused") }?.value()
         await waitFor { client.snapshot?.focusedWindow?.id == 11 }
-        XCTAssertEqual(backend.queryCalls, [["-m", "query", "--windows", YabaiClient.windowFields, "--window", "11"]])
+        XCTAssertTrue(backend.queryCalls.isEmpty, "yabai's window ID is enough for a known window")
         XCTAssertEqual(client.snapshot?.windows.filter(\.focused).count, 1)
         await client.stop()
     }
@@ -193,40 +193,91 @@ final class NativeRefreshTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 30_000_000)
         XCTAssertTrue(backend.queryCalls.isEmpty, "Automatic refresh must leave the first drag frames alone")
         await waitFor { client.snapshot?.focusedWindow?.id == 11 }
-        XCTAssertEqual(backend.queryCalls.count, 1)
-        XCTAssertEqual(backend.queryCalls.first?.last, "11")
+        XCTAssertTrue(backend.queryCalls.isEmpty, "The latest click target is applied locally")
         await client.stop()
     }
 
-    func testHeldPointerDelaysFocusQueryUntilReleaseAndStopCancelsIt() async {
+    func testFocusAcrossDisplaysPatchesLocallyWithoutYabaiQueries() async {
         let backend = Backend()
-        var held = true
-        func make() -> YabaiClient {
-            YabaiClient(path: "/fixture/yabai", notification: "test.held.\(UUID().uuidString)", run: backend.run,
-                        register: { _, _ in 0 }, windowEvents: nil, frontmostPID: { backend.foreground },
-                        pointerHeld: { held })
-        }
-        let client = make()
+        backend.windows[1]["space"] = 2; backend.windows[1]["display"] = 2
+        let client = client(backend)
         await start(client); backend.calls.removeAll()
-        backend.windows[0]["has-focus"] = false; backend.windows[1]["has-focus"] = true
-        client.scheduleFocusRefresh(10)
-        client.scheduleFocusRefresh(11) // the newest click target wins
-        try? await Task.sleep(nanoseconds: 300_000_000)
-        XCTAssertTrue(backend.queryCalls.isEmpty, "No focus query while the dragged window is held")
-        held = false
+        XCTAssertEqual(client.snapshot?.focusedWindow?.id, 10)
+        client.scheduleFocusRefresh(11, native: true) // AX focus event for a window on the other display
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertNotEqual(client.snapshot?.focusedWindow?.id, 11, "Nothing runs until interaction is quiet")
         await waitFor { client.snapshot?.focusedWindow?.id == 11 }
-        XCTAssertEqual(backend.queryCalls, [["-m", "query", "--windows", YabaiClient.windowFields, "--window", "11"]])
+        XCTAssertEqual(client.snapshot?.focusedSpace?.index, 2)
+        XCTAssertEqual(client.snapshot?.displays.filter { $0.focused == true }.map(\.index), [2])
+        XCTAssertEqual(client.snapshot?.windows.filter(\.focused).map(\.id), [11])
+        XCTAssertTrue(backend.queryCalls.isEmpty, "A known on-screen window needs no yabai query")
+        // A window the snapshot does not know falls back to yabai once.
+        backend.windows.append(["id": 12, "pid": 123, "app": "Fixture", "title": "C", "space": 1, "display": 1,
+                                "subrole": "AXStandardWindow", "has-focus": true, "is-visible": true, "is-floating": false,
+                                "is-sticky": false, "is-hidden": false, "is-minimized": false, "stack-index": 0, "frame": ["x": 12.0]])
+        for i in backend.windows.indices where backend.windows[i]["id"] as? Int != 12 { backend.windows[i]["has-focus"] = false }
+        // From AX, an unmanaged panel/popover ID is ignored: no yabai query, focus unchanged.
+        client.scheduleFocusRefresh(12, native: true)
+        try? await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertTrue(backend.queryCalls.isEmpty, "Unmanaged AX focus must not cost yabai a query")
+        XCTAssertEqual(client.snapshot?.focusedWindow?.id, 11)
+        // From yabai's own focus signal (fallback mode), an unknown window is resolved through yabai.
+        client.scheduleFocusRefresh(12)
+        await waitFor { client.snapshot?.focusedWindow?.id == 12 }
+        XCTAssertFalse(backend.queryCalls.isEmpty)
         await client.stop()
-        // Quitting during a held drag leaves no waiting task behind.
-        held = true
-        let quitting = make()
-        await start(quitting); backend.calls.removeAll()
-        quitting.scheduleFocusRefresh(11)
-        try? await Task.sleep(nanoseconds: 150_000_000)
-        await quitting.stop()
-        held = false
-        try? await Task.sleep(nanoseconds: 200_000_000)
-        XCTAssertTrue(backend.queryCalls.isEmpty)
+    }
+
+    func testDragMovesPostponeAllDeferredWorkUntilQuiet() async {
+        let backend = Backend(); let client = client(backend)
+        await start(client); backend.calls.removeAll()
+        var published = 0
+        client.onUpdate = { _, _ in published += 1 }
+        client.scheduleFocusRefresh(11) // click
+        client.scheduleRefresh()         // e.g. a Space notification at the same moment
+        for _ in 0..<8 {                 // drag: move events keep arriving
+            client.scheduleMoveRefresh()
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertTrue(backend.queryCalls.isEmpty, "No query while the drag is still producing events")
+        XCTAssertEqual(published, 0, "No redraw while the drag is still producing events")
+        await waitFor { !backend.queryCalls.isEmpty }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(backend.queryCalls.filter { $0.contains("--spaces") }.count, 1, "One merged full refresh after the drag")
+        await client.stop()
+        let stopped = backend.calls.count
+        client.scheduleMoveRefresh()
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(backend.calls.count, stopped, "Nothing runs after stop")
+    }
+
+    func testEndlessMoveEventsCannotPostponeRefreshPastTheCap() async {
+        let backend = Backend(); let client = client(backend)
+        await start(client); backend.calls.removeAll()
+        let begin = Date()
+        var firstQuery: TimeInterval?
+        for _ in 0..<40 { // ~4 s of a window that never stops moving
+            client.scheduleMoveRefresh()
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            if firstQuery == nil, !backend.queryCalls.isEmpty { firstQuery = Date().timeIntervalSince(begin) }
+        }
+        let at = try? XCTUnwrap(firstQuery, "Refresh must run while events continue")
+        XCTAssertGreaterThanOrEqual(at ?? 0, 2.9)
+        XCTAssertLessThan(at ?? 99, 3.6)
+        await client.stop()
+    }
+
+    func testActivationIsNotLostWhenItsAXWindowIsUnmanaged() async {
+        let backend = Backend(); let client = client(backend)
+        await start(client); backend.calls.removeAll()
+        // Switching apps: activation (no ID) plus an AX focus event for a panel yabai does not list.
+        client.handleAppNotification(Notification(name: NSWorkspace.didActivateApplicationNotification,
+                                                  userInfo: [NSWorkspace.applicationUserInfoKey: NSRunningApplication.current]))
+        client.scheduleFocusRefresh(999, native: true)
+        await waitFor { !backend.queryCalls.isEmpty }
+        XCTAssertEqual(backend.queryCalls.first, ["-m", "query", "--windows", YabaiClient.windowFields, "--window"],
+                       "The activation still resolves the app's focused window")
+        await client.stop()
     }
 
     func testDeferredFocusDiscardsOlderQueuedFocus() async {
@@ -243,7 +294,7 @@ final class NativeRefreshTests: XCTestCase {
         backend.releaseFocus?.resume(); backend.releaseFocus = nil
         await waitFor { client.snapshot?.focusedWindow?.id == 11 }
         XCTAssertFalse(published.contains { $0 != 11 })
-        XCTAssertEqual(backend.queryCalls.count, 2)
+        XCTAssertEqual(backend.queryCalls.count, 1, "The stale in-flight query is discarded; the newer focus is local")
         await client.stop()
     }
 
