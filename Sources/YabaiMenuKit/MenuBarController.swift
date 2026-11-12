@@ -24,7 +24,6 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
     private var statusMouseMonitor: Any?
     private var nativeClick: (window: Int, target: BarTarget, bounds: NSRect)?
     private var menuAnchorObservers: [NSObjectProtocol] = []
-    private var modifierMonitors: [Any] = []
     private var menuAnchorUpdateQueued = false
     private var screenObserver: NSObjectProtocol?
     private var menuTracking = false
@@ -80,7 +79,6 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
     deinit {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         menuAnchorObservers.forEach(NotificationCenter.default.removeObserver)
-        modifierMonitors.forEach(NSEvent.removeMonitor)
         if let statusMouseMonitor { NSEvent.removeMonitor(statusMouseMonitor) }
     }
 
@@ -112,7 +110,6 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
                     Task { @MainActor in self?.scheduleMenuAnchorUpdate() }
                 })
             }
-            installModifierMonitors()
         }
     }
 
@@ -134,18 +131,6 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
         widgetBar?.removeFromSuperview(); widgetBar = nil
         statusItem = nil
         NSStatusBar.system.removeStatusItem(item)
-    }
-
-    private func installModifierMonitors() {
-        modifierMonitors.forEach(NSEvent.removeMonitor)
-        modifierMonitors.removeAll()
-        if let global = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: { [weak self] _ in
-            Task { @MainActor in self?.menuBarHosts.updateCommandState(NSEvent.modifierFlags.contains(.command)) }
-        }) { modifierMonitors.append(global) }
-        if let local = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { [weak self] event in
-            self?.menuBarHosts.updateCommandState(event.modifierFlags.contains(.command))
-            return event
-        }) { modifierMonitors.append(local) }
     }
 
     private func scheduleMenuAnchorUpdate() {
@@ -170,10 +155,9 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
                 ($0.target, NSRect(x: window.frame.minX + button.frame.minX + bar.frame.minX + $0.frame.minX,
                                   y: window.frame.minY, width: $0.frame.width, height: window.frame.height))
             }
-        } else if let host = menuBarHosts.hosts.values.first(where: { $0.panel.isVisible && $0.panel.frame.contains(point) }) {
-            let local = host.bar.convert(host.panel.convertPoint(fromScreen: point), from: nil)
-            hit = host.bar.cell(at: local).map { ($0.target, host.panel.convertToScreen(host.bar.convert($0.frame, to: nil))) }
-        } else { hit = nil }
+        } else {
+            hit = menuBarHosts.hit(at: event.locationInWindow, in: window)
+        }
         if event.type == .rightMouseDown || (event.type == .leftMouseDown && event.modifierFlags.contains(.control)) {
             nativeClick = nil
             if let hit { barContextMenu(hit.target).popUp(positioning: nil, at: point, in: nil) }
@@ -485,8 +469,6 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
     @objc private func refresh() { client?.refresh() }
     @objc private func dismissError() { client?.dismissActionError() }
     @objc private func checkConnection() {
-        // The first launch may precede Accessibility permission for global modifier events.
-        installModifierMonitors()
         connectClient()
     }
     @objc private func aboutApp() { NSApp.orderFrontStandardAboutPanel(nil); NSApp.activate(ignoringOtherApps: true) }

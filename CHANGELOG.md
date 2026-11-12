@@ -2,6 +2,10 @@
 
 ## 1.0.0 — release candidate
 
+- Build 44: host per-display menu-bar content in the same native status slots as All displays, including in Mission Control. Restore the previous behavior for standalone bars.
+
+- Build 43: hide the bar panels while Mission Control is open.
+
 - Build 42: wait for mouse release before resolving Accessibility focus and title notifications. Coalesce repeated notifications and recheck the primary button before starting a queued read.
 
 - Build 41: defer automatic queries and bar updates while the primary mouse button is held. Add a 0/300 ms focus-only delay option under Connection.

@@ -3,8 +3,8 @@
 //
 // 代码逻辑：
 // 1. 复用每屏状态投影，按最长一屏内容申请统一的原生槽位。
-// 2. 用本应用状态栏窗口的实际几何定位透明面板，不猜测系统菜单位置。
-// 3. 槽位隐藏或定位不明确时收起面板；Command 仅让鼠标穿透，内容保持可见。
+// 2. 将每屏内容挂在对应的原生窗口，让系统处理移动与可见性。
+// 3. 槽位不可用时卸载内容；点击继续由原生槽位的事件监视器处理。
 //
 // 必需输入：快照、设置、屏幕映射及本应用的原生槽位窗口。
 // 预期输出：每屏独立内容；按现有刷新批量读取自有槽位状态，不增加 yabai 查询或周期计时器。
@@ -25,21 +25,23 @@ final class MenuBarHosts {
         }
     }
 
+    final class SlotContent: NSView {
+        // Leave hit testing to the native slot, including Command-drag to move the item.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
     @MainActor final class Host {
-        let panel: FloatingBarPanel
+        let content = SlotContent()
         let bar = WidgetBarView()
         var anchorNumber: Int?
+
         init() {
-            panel = FloatingBarPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-            panel.isReleasedWhenClosed = false
-            panel.hidesOnDeactivate = false
-            panel.isOpaque = false
-            panel.backgroundColor = .clear
-            panel.hasShadow = false
-            panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
-            panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
-            panel.isExcludedFromWindowsMenu = true
-            panel.contentView?.addSubview(bar)
+            content.clipsToBounds = true
+            content.addSubview(bar)
+        }
+
+        var frameOnScreen: NSRect? {
+            content.window.map { $0.convertToScreen(content.convert(content.bounds, to: nil)) }
         }
     }
 
@@ -71,7 +73,9 @@ final class MenuBarHosts {
 
     static func contentFrame(in window: NSWindow) -> NSRect {
         // Native slots include chrome around the inset view that contains their mirrored button.
-        guard let root = window.contentView, root.subviews.count == 1, let content = root.subviews.first else { return window.frame }
+        guard let root = window.contentView else { return window.frame }
+        let nativeViews = root.subviews.filter { !($0 is SlotContent) }
+        guard nativeViews.count == 1, let content = nativeViews.first else { return window.frame }
         let frame = window.convertToScreen(content.convert(content.bounds, to: nil))
         guard frame.height >= 20, frame.width > 0, window.frame.contains(frame) else { return window.frame }
         return frame
@@ -91,17 +95,20 @@ final class MenuBarHosts {
                          contentOrigin: NSPoint(x: width - size.width, y: 0), appliesLayout: ready)
     }
 
-    func updateCommandState(_ down: Bool) {
-        for host in hosts.values where host.panel.ignoresMouseEvents != down { host.panel.ignoresMouseEvents = down }
+    func hit(at location: NSPoint, in slot: NSWindow) -> (target: BarTarget, bounds: NSRect)? {
+        guard let host = hosts.values.first(where: { $0.content.window === slot }),
+              let frame = host.frameOnScreen, frame.contains(slot.convertPoint(toScreen: location)),
+              let cell = host.bar.cell(at: host.bar.convert(location, from: nil)) else { return nil }
+        let bounds = slot.convertToScreen(host.bar.convert(cell.frame, to: nil))
+        return (cell.target, bounds.intersection(frame))
     }
 
     @discardableResult
     func update(_ snapshot: Snapshot, settings: AppSettings, status: ConnectionStatus,
                 reserveWidth: (CGFloat) -> Void = { _ in },
-                commandDown: Bool = NSEvent.modifierFlags.contains(.command),
                 icon: (Window) -> NSImage?, menu: @escaping (BarTarget) -> NSMenu?, select: @escaping (BarTarget) -> Void) -> CGFloat {
         let connected = screens(snapshot), ids = Set(connected.map(\.id))
-        for id in Array(hosts.keys) where !ids.contains(id) { hosts.removeValue(forKey: id)?.panel.close() }
+        for id in Array(hosts.keys) where !ids.contains(id) { hosts.removeValue(forKey: id)?.content.removeFromSuperview() }
         let initialSlots = anchors()
         var layouts = [UInt32: WidgetBarView.Layout]()
         for screen in connected {
@@ -114,11 +121,7 @@ final class MenuBarHosts {
             let height = localSlots.count == 1 ? Self.contentFrame(in: localSlots[0]).height : NSStatusBar.system.thickness
             host.bar.onSelect = select
             host.bar.contextMenu = menu
-            if host.bar.menu == nil {
-                let context = menu(.menu)
-                host.bar.menu = context
-                host.panel.contentView?.menu = context
-            }
+            if host.bar.menu == nil { host.bar.menu = menu(.menu) }
             layouts[screen.id] = host.bar.prepare(snapshot, settings: local,
                                                 enabled: status.mode == .live || status.mode == .limited,
                                                 height: min(64, max(20, height)), display: screen.index)
@@ -131,36 +134,41 @@ final class MenuBarHosts {
             guard let number = row[kCGWindowNumber as String] as? Int, ownNumbers.contains(number) else { return nil }
             return number
         })
-        updateCommandState(commandDown)
         for screen in connected {
             guard let host = hosts[screen.id] else { continue }
             let candidates = slots.filter { slot in
                 Self.anchorFrame(slot, screen: screen.frame, onscreen: onscreen) != nil
             }
-            guard status.mode != .suspended, candidates.count == 1, let slot = candidates.first else {
-                if host.panel.isVisible { host.panel.orderOut(nil) }
+            guard status.mode != .suspended, candidates.count == 1,
+                  let slot = candidates.first, let root = slot.contentView else {
+                host.content.removeFromSuperview()
                 continue
             }
             let previousSize = host.anchorNumber == slot.windowNumber && !host.bar.cells.isEmpty ? host.bar.frame.size : nil
             guard let placement = Self.placement(in: Self.contentFrame(in: slot), requestedWidth: width,
                                                 nextSize: layouts[screen.id]?.size ?? host.bar.frame.size, previousSize: previousSize) else {
-                if host.panel.isVisible { host.panel.orderOut(nil) }
+                host.content.removeFromSuperview()
                 continue
             }
             if placement.appliesLayout {
                 if let layout = layouts[screen.id] { host.bar.apply(layout, icon: icon) }
                 host.anchorNumber = slot.windowNumber
             }
-            // Keep the previous content inside its own slot until the new width is ready.
+            // Mount outside the primary button whose image AppKit mirrors onto other displays.
+            if host.content.superview !== root {
+                host.content.removeFromSuperview()
+                root.addSubview(host.content, positioned: .above, relativeTo: nil)
+            }
+            // Keep the previous content clipped to its slot until the new width is ready.
+            let frame = root.convert(slot.convertFromScreen(placement.frame), from: nil)
+            if host.content.frame != frame { host.content.frame = frame }
             if host.bar.frame.origin != placement.contentOrigin { host.bar.frame.origin = placement.contentOrigin }
-            if host.panel.frame != placement.frame { host.panel.setFrame(placement.frame, display: false) }
-            if !host.panel.isVisible { host.panel.orderFrontRegardless() }
         }
         return width
     }
 
     func close() {
-        for host in hosts.values { host.panel.close() }
+        for host in hosts.values { host.content.removeFromSuperview() }
         hosts.removeAll()
     }
 }
