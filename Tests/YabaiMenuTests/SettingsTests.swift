@@ -5,6 +5,17 @@ import ServiceManagement
 @testable import YabaiMenuKit
 
 final class SettingsTests: XCTestCase {
+    func testAutomaticFocusDelayPreference() throws {
+        let suite = "test.yabai-menu.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var settings = AppSettings(defaults: defaults)
+        XCTAssertTrue(settings.delayAutomaticFocus)
+        settings.delayAutomaticFocus = false
+        settings.save(to: defaults)
+        XCTAssertFalse(AppSettings(defaults: defaults).delayAutomaticFocus)
+    }
+
     @MainActor
     func testPreviewHeightFitsActualBarInsteadOfReservingMaximum() throws {
         guard ProcessInfo.processInfo.environment["YABAI_MENU_UI_TESTS"] == "1" else { throw XCTSkip("AppKit session required") }

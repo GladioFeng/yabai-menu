@@ -66,7 +66,7 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
                     detail: "yabai was not found. Install it, or choose its executable in Settings."))
                 return
             }
-            let next = YabaiClient(path: path)
+            let next = YabaiClient(path: path, delayAutomaticFocus: settings.delayAutomaticFocus)
             client = next
             focusAction = { [weak next] space, window in next?.focus(space: space, window: window) }
             next.onUpdate = { [weak self, weak next] snapshot, status in
@@ -510,6 +510,7 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
                 settings.save(to: self.settingsDefaults)
                 self.update(self.snapshot, status: self.status, force: true)
                 if pathChanged { self.connectClient() }
+                else { self.client?.delayAutomaticFocus = settings.delayAutomaticFocus }
             }
             controller.onReconnect = { [weak self] in self?.checkConnection() }
             controller.onCopyDiagnostics = { [weak self] in self?.copyDiagnostics() }

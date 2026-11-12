@@ -2,6 +2,10 @@
 
 ## 1.0.0 — release candidate
 
+- Build 42: wait for mouse release before resolving Accessibility focus and title notifications. Coalesce repeated notifications and recheck the primary button before starting a queued read.
+
+- Build 41: defer automatic queries and bar updates while the primary mouse button is held. Add a 0/300 ms focus-only delay option under Connection.
+
 - Build 40: cap deferred refreshes at 3 seconds so continuously moving windows cannot postpone them indefinitely, and keep an app activation when its Accessibility focus event names a window yabai does not manage.
 
 - Build 39: ignore Accessibility focus events for windows yabai does not manage (panels, popovers) instead of falling back to a yabai focus query and full refresh.

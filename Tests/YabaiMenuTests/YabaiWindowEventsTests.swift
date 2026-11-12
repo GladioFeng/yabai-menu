@@ -8,7 +8,7 @@ final class YabaiWindowEventsTests: XCTestCase {
     final class Backend {
         struct Callback {
             let loop: CFRunLoop
-            let receive: (YabaiWindowEvents.Event) -> Void
+            let receive: (YabaiWindowEvents.Observation) -> Void
         }
         private let lock = NSLock()
         private var callbacks: [pid_t: Callback] = [:]
@@ -16,6 +16,21 @@ final class YabaiWindowEventsTests: XCTestCase {
         private var cancellations: [pid_t] = []
         private var remainingFailures: Int
         private var titleValue: String?
+        private var pressed = false
+        private var reads: [YabaiWindowEvents.WindowNotification] = []
+
+        var buttonDown: Bool {
+            get { lock.lock(); defer { lock.unlock() }; return pressed }
+            set { lock.lock(); pressed = newValue; lock.unlock() }
+        }
+
+        var resolved: [YabaiWindowEvents.WindowNotification] {
+            lock.lock(); defer { lock.unlock() }; return reads
+        }
+
+        func recordRead(_ kind: YabaiWindowEvents.WindowNotification) {
+            lock.lock(); reads.append(kind); lock.unlock()
+        }
         private var firstSubscription: (() -> Void)?
 
         func onFirstSubscription(_ action: @escaping () -> Void) {
@@ -34,7 +49,7 @@ final class YabaiWindowEventsTests: XCTestCase {
         var registered: [pid_t] { lock.lock(); defer { lock.unlock() }; return registrations }
         var cancelled: [pid_t] { lock.lock(); defer { lock.unlock() }; return cancellations }
 
-        func subscribe(_ pid: pid_t, _ receive: @escaping (YabaiWindowEvents.Event) -> Void) -> (() -> Void)? {
+        func subscribe(_ pid: pid_t, _ receive: @escaping (YabaiWindowEvents.Observation) -> Void) -> (() -> Void)? {
             lock.lock()
             registrations.append(pid)
             if remainingFailures > 0 {
@@ -54,12 +69,16 @@ final class YabaiWindowEventsTests: XCTestCase {
 
         func emitInline(_ event: YabaiWindowEvents.Event, pid: pid_t = 123) {
             lock.lock(); let callback = callbacks[pid]!; lock.unlock()
-            callback.receive(event)
+            callback.receive(.event(event))
         }
 
         func emit(_ event: YabaiWindowEvents.Event, pid: pid_t = 123) {
+            emitObservation(.event(event), pid: pid)
+        }
+
+        func emitObservation(_ observation: YabaiWindowEvents.Observation, pid: pid_t = 123) {
             lock.lock(); let callback = callbacks[pid]!; lock.unlock()
-            CFRunLoopPerformBlock(callback.loop, CFRunLoopMode.defaultMode.rawValue) { callback.receive(event) }
+            CFRunLoopPerformBlock(callback.loop, CFRunLoopMode.defaultMode.rawValue) { callback.receive(observation) }
             CFRunLoopWakeUp(callback.loop)
         }
     }
@@ -180,12 +199,73 @@ final class YabaiWindowEventsTests: XCTestCase {
         let element = AXUIElementCreateApplication(123)
         backend.emit(.titleChanged(id: 10, pid: 123, element: element, title: "B"))
         await waitFor { titles == ["B"] }
-        let confirmed = await events.readTitle(element)
+        guard case .value(let confirmed) = await events.readTitle(element) else {
+            return XCTFail("Manual read was deferred")
+        }
         XCTAssertEqual(confirmed, "C")
         backend.emit(.titleChanged(id: 10, pid: 123, element: element, title: "B"))
         await waitFor { titles == ["B", "B"] }
         events.stop()
         await waitFor { backend.cancelled.count == 1 }
+    }
+
+    @MainActor
+    func testRawAXReadsWaitFromMouseDownAndCoalesceBeforeRelease() async throws {
+        let backend = Backend(title: "New")
+        backend.buttonDown = true
+        let element = AXUIElementCreateApplication(123)
+        let newerFocus = AXUIElementCreateApplication(124)
+        let events = YabaiWindowEvents(trusted: { true }, subscribe: backend.subscribe,
+                                       titleReader: { _ in XCTFail("Reconciliation queried while pressed"); return "unexpected" },
+                                       leftButtonDown: { backend.buttonDown },
+                                       resolve: { pid, element, kind, isDown in
+            backend.recordRead(kind)
+            XCTAssertFalse(isDown(), "No native AX reads may start before release")
+            if kind == .focus { return .value(.focused(id: CFEqual(element, newerFocus) ? 11 : 10, pid: pid)) }
+            return .value(.titleChanged(id: 10, pid: pid, element: element, title: backend.title))
+        })
+        defer { events.stop() }
+        var titles: [String] = [], focus: [Int] = []
+        var moves = 0
+        events.start {
+            switch $0 {
+            case .titleChanged(_, _, _, let title): if let title { titles.append(title) }
+            case .focused(let id, _): focus.append(id)
+            case .moved: moves += 1
+            default: break
+            }
+        }
+        events.update(try windows([10, 11]))
+        await waitFor { backend.registered == [123] }
+        backend.emitObservation(.window(element, .title))
+        backend.emitObservation(.window(element, .focus))
+        backend.emitObservation(.window(element, .title))
+        backend.emitObservation(.window(newerFocus, .focus))
+        // Worker barrier. No window movement has been emitted.
+        guard case .deferred = await events.readTitle(element, automatic: true),
+              case .deferred = await events.readFocusedWindow(pid: 123) else {
+            return XCTFail("Queued automatic AX read was not deferred")
+        }
+        XCTAssertTrue(backend.resolved.isEmpty)
+        XCTAssertTrue(titles.isEmpty)
+        XCTAssertTrue(focus.isEmpty)
+        XCTAssertEqual(moves, 0)
+
+        backend.buttonDown = false
+        events.resumeAfterMouseUp()
+        await waitFor { titles == ["New"] && focus == [11] }
+
+        XCTAssertEqual(backend.resolved, [.focus, .title])
+
+        backend.buttonDown = true
+        backend.emitObservation(.window(element, .title))
+        guard case .deferred = await events.readTitle(element, automatic: true) else {
+            return XCTFail("Queued automatic title read was not deferred")
+        }
+        backend.title = "Newest"
+        backend.buttonDown = false
+        // The pending-only timer also recovers when no mouse-up notification is delivered.
+        await waitFor { titles == ["New", "Newest"] }
     }
 
     func testMissingOrInvalidWindowIDBridgeCannotGuessAnIdentity() {

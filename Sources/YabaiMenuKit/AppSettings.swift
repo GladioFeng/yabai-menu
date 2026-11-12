@@ -71,6 +71,7 @@ struct AppSettings: Equatable {
     var cornerRadius = 5
     var showBorder = false
     var yabaiPath = ""
+    var delayAutomaticFocus = true
     var width: Double { density == .custom ? Double(customWidth) : density.width }
 
     var effectivePlacement: Placement { placement }
@@ -154,7 +155,8 @@ struct AppSettings: Equatable {
         (\.showWindowTitle, ("showWindowTitle", true)), (\.processOnlyIcon, ("processOnlyIcon", false)),
         (\.monochrome, ("monochrome", false)), (\.showBorder, ("showBorder", false)),
         (\.floatingLocked, ("floatingLocked", false)), (\.floatingAboveFullscreen, ("floatingAboveFullscreen", false)),
-        (\.barBorder, ("barBorder", true)), (\.barShadow, ("barShadow", true))]
+        (\.barBorder, ("barBorder", true)), (\.barShadow, ("barShadow", true)),
+        (\.delayAutomaticFocus, ("delayAutomaticFocus", true))]
     private static let numbers: [(WritableKeyPath<Self, Int>, String, ClosedRange<Int>)] = [
         (\.fontSize, "fontSize", 8...24), (\.backgroundOpacity, "backgroundOpacity", 0...100),
         (\.cornerRadius, "cornerRadius", 0...18), (\.iconSize, "iconSize", 8...32),

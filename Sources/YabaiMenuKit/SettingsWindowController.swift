@@ -49,6 +49,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     let tabs = NSTabView()
     let layout = NSButton(checkboxWithTitle: "Show focused window layout", target: nil, action: nil)
     let path = NSTextField(string: "")
+    let focusRefreshDelay = NSPopUpButton()
     let login = NSButton(checkboxWithTitle: "Launch Yabai Menu at login", target: nil, action: nil)
     let reconnect = NSButton(title: "Check Connection", target: nil, action: nil)
     let accessibility = NSButton(title: "Enable Native Window Updates…", target: nil, action: nil)
@@ -115,6 +116,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         spaceLayout.selectItem(at: AppSettings.LayoutStyle.allCases.firstIndex(of: settings.spaceLayout)!)
         spaceWindowLayout.selectItem(at: AppSettings.LayoutStyle.allCases.firstIndex(of: settings.spaceWindowLayout)!)
         layout.state = settings.showLayout ? .on : .off
+        focusRefreshDelay.addItems(withTitles: ["0 ms", "300 ms"])
+        focusRefreshDelay.selectItem(at: settings.delayAutomaticFocus ? 1 : 0)
+        focusRefreshDelay.target = self
+        focusRefreshDelay.action = #selector(displayChanged(_:))
         path.stringValue = settings.yabaiPath
         path.placeholderString = "Automatic detection"
         path.delegate = self
@@ -228,7 +233,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         let connectionGrid = NSGridView(views: [
             [NSTextField(labelWithString: "yabai path"), path],
             [NSTextField(labelWithString: "Startup"), login],
-            [NSTextField(labelWithString: "Window events"), accessibility]
+            [NSTextField(labelWithString: "Window events"), accessibility],
+            [label("Focus refresh delay"), focusRefreshDelay]
         ])
         for table in [grid, colorsGrid, spacesGrid, processGrid, floatingGrid, connectionGrid] {
             table.rowSpacing = 10
@@ -352,6 +358,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         value.iconSize = iconSize.selectedItem?.tag ?? 16
         value.customWidth = min(1000, max(120, Int(width.doubleValue.rounded())))
         value.showLayout = layout.state == .on
+        value.delayAutomaticFocus = focusRefreshDelay.indexOfSelectedItem == 1
         value.layoutStyle = AppSettings.LayoutStyle.allCases[windowLayout.indexOfSelectedItem]
         value.spaceLayout = AppSettings.LayoutStyle.allCases[spaceLayout.indexOfSelectedItem]
         value.spaceWindowLayout = AppSettings.LayoutStyle.allCases[spaceWindowLayout.indexOfSelectedItem]

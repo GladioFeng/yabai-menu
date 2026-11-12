@@ -15,6 +15,8 @@ final class NativeRefreshTests: XCTestCase {
         var failQueries = false
         var holdNextFocus = false
         var releaseFocus: CheckedContinuation<Void, Never>?
+        var holdNextWindows = false
+        var releaseWindows: CheckedContinuation<Void, Never>?
         var windows: [[String: Any]] = [10, 11].map { id in
             ["id": id, "pid": 123, "app": "Fixture", "title": "A", "space": 1, "display": 1,
              "subrole": "AXStandardWindow", "has-focus": id == 10, "is-visible": true,
@@ -49,6 +51,10 @@ final class NativeRefreshTests: XCTestCase {
                 holdNextFocus = false
                 await withCheckedContinuation { releaseFocus = $0 }
             }
+            if args.contains("--windows"), !args.contains("--window"), holdNextWindows {
+                holdNextWindows = false
+                await withCheckedContinuation { releaseWindows = $0 }
+            }
             return data
         }
     }
@@ -59,9 +65,12 @@ final class NativeRefreshTests: XCTestCase {
         XCTAssertTrue(predicate(), file: file, line: line)
     }
 
-    private func client(_ backend: Backend, events: YabaiWindowEvents? = nil) -> YabaiClient {
+    private func client(_ backend: Backend, events: YabaiWindowEvents? = nil,
+                        delayAutomaticFocus: Bool = true,
+                        leftButtonDown: @escaping () -> Bool = { false }) -> YabaiClient {
         YabaiClient(path: "/fixture/yabai", notification: "test.native.\(UUID().uuidString)", run: backend.run,
-                    register: { _, _ in 0 }, windowEvents: events, frontmostPID: { backend.foreground })
+                    register: { _, _ in 0 }, windowEvents: events, frontmostPID: { backend.foreground },
+                    delayAutomaticFocus: delayAutomaticFocus, leftButtonDown: leftButtonDown)
     }
 
     private func start(_ client: YabaiClient) async {
@@ -86,7 +95,7 @@ final class NativeRefreshTests: XCTestCase {
         var handlers: [String: () -> Void] = [:]
         let client = YabaiClient(path: "/fixture/yabai", notification: "test.native.\(UUID().uuidString)", run: backend.run,
             register: { name, handler in handlers[name] = handler; return 0 }, windowEvents: nil,
-            frontmostPID: { 123 }, readFocus: { _ in 11 })
+            frontmostPID: { 123 }, readFocus: { _ in 11 }, leftButtonDown: { false })
         await start(client)
         backend.calls.removeAll()
         backend.windows[0]["has-focus"] = false; backend.windows[1]["has-focus"] = true
@@ -183,7 +192,7 @@ final class NativeRefreshTests: XCTestCase {
         var focusID = 10
         let client = YabaiClient(path: "/fixture/yabai", notification: "test.delay",
             run: backend.run, register: { name, handler in handlers[name] = handler; return 0 },
-            windowEvents: nil, frontmostPID: { backend.foreground }, readFocus: { _ in focusID })
+            windowEvents: nil, frontmostPID: { backend.foreground }, readFocus: { _ in focusID }, leftButtonDown: { false })
         await start(client); backend.calls.removeAll()
         backend.windows[0]["has-focus"] = false; backend.windows[1]["has-focus"] = true
         client.handleAppNotification(Notification(name: NSWorkspace.didActivateApplicationNotification))
@@ -265,6 +274,134 @@ final class NativeRefreshTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(at ?? 0, 2.9)
         XCTAssertLessThan(at ?? 99, 3.6)
         await client.stop()
+    }
+
+    func testHeldLeftButtonOutlastsCapAndMergesFocusWithWindowsOnRelease() async {
+        let backend = Backend()
+        var down = false
+        let client = client(backend, leftButtonDown: { down })
+        await start(client); backend.calls.removeAll()
+        var published = 0
+        client.onUpdate = { _, _ in published += 1 }
+        down = true
+        backend.windows[0]["has-focus"] = false; backend.windows[1]["has-focus"] = true
+        backend.windows[1]["frame"] = ["x": 500.0]
+        client.scheduleFocusRefresh(11, native: true)
+        client.scheduleMoveRefresh()
+        // 按住但不继续移动，超过旧的三秒上限仍不得开始查询或绘制。
+        try? await Task.sleep(nanoseconds: YabaiClient.maxDeferral + YabaiClient.quietPeriod + 50_000_000)
+        XCTAssertTrue(backend.queryCalls.isEmpty)
+        XCTAssertEqual(published, 0)
+        down = false
+        client.resumeDeferredAfterMouseUp()
+        await waitFor { published > 0 && client.snapshot?.focusedWindow?.id == 11 }
+        try? await Task.sleep(nanoseconds: YabaiClient.quietPeriod + 50_000_000)
+        XCTAssertEqual(client.snapshot?.focusedWindow?.frame.x, 500)
+        XCTAssertEqual(published, 1, "Focus and moved geometry must become visible together")
+        XCTAssertEqual(backend.queryCalls.count, 3, "One full batch covers the pending focus and windows")
+        for domain in ["--windows", "--spaces", "--displays"] {
+            XCTAssertEqual(backend.queryCalls.filter { $0.contains(domain) }.count, 1)
+        }
+        await client.stop()
+    }
+
+    func testHeldTitlesKeepLatestAndRecoverWithoutMouseUpNotification() async {
+        let backend = Backend()
+        var down = false
+        let client = client(backend, leftButtonDown: { down })
+        await start(client); backend.calls.removeAll()
+        var published: [String] = []
+        client.onUpdate = { state, _ in
+            published.append(state?.windows.first { $0.id == 11 }?.title ?? "missing")
+        }
+        down = true
+        let element = AXUIElementCreateApplication(123)
+        client.applyNativeTitle(id: 11, pid: 123, element: element, title: "Native B")
+        client.applyNativeTitle(id: 11, pid: 123, element: element, title: "Native C")
+        client.applyNativeTitle(id: 11, pid: 456, element: element, title: "Wrong owner")
+        try? await Task.sleep(nanoseconds: YabaiClient.quietPeriod + 50_000_000)
+        XCTAssertTrue(published.isEmpty)
+        XCTAssertTrue(backend.queryCalls.isEmpty)
+        // 不调用 mouseUp 回调：只在有待交付状态时运行的补救检查仍须发现松手。
+        down = false
+        await waitFor { !published.isEmpty }
+        try? await Task.sleep(nanoseconds: YabaiClient.quietPeriod + 50_000_000)
+        XCTAssertEqual(published, ["Native C"])
+        XCTAssertTrue(backend.queryCalls.isEmpty, "Valid native titles do not need a yabai query")
+        await client.stop()
+    }
+
+    func testAutomaticQueryFinishingWhileHeldWaitsForFreshStateAfterRelease() async throws {
+        let backend = Backend()
+        var down = false
+        let client = client(backend, leftButtonDown: { down })
+        await start(client); backend.calls.removeAll()
+        var published: [Double] = []
+        client.onUpdate = { state, _ in
+            published.append(state?.windows.first { $0.id == 10 }?.frame.x ?? -1)
+        }
+        backend.windows[0]["frame"] = ["x": 500.0]
+        backend.holdNextWindows = true
+        client.scheduleMoveRefresh()
+        await waitFor { backend.releaseWindows != nil }
+        let response = try XCTUnwrap(backend.releaseWindows)
+        backend.releaseWindows = nil
+        down = true
+        // 已冻结的响应仍是 500；松手后必须获取并发布 600，不能泄漏旧响应。
+        backend.windows[0]["frame"] = ["x": 600.0]
+        response.resume()
+        try? await Task.sleep(nanoseconds: YabaiClient.quietPeriod + 50_000_000)
+        XCTAssertTrue(published.isEmpty)
+        XCTAssertEqual(backend.queryCalls.count, 1)
+        down = false
+        client.resumeDeferredAfterMouseUp()
+        await waitFor { published == [600] }
+        try? await Task.sleep(nanoseconds: YabaiClient.quietPeriod + 50_000_000)
+        XCTAssertEqual(published, [600])
+        XCTAssertEqual(backend.queryCalls.count, 2)
+        XCTAssertTrue(backend.queryCalls.allSatisfy { $0.contains("--windows") && !$0.contains("--window") })
+        await client.stop()
+    }
+
+    func testBothFocusDelaySettingsRespectHeldButtonAndPendingSettingChanges() async {
+        for delay in [false, true] {
+            let backend = Backend()
+            var down = false
+            let client = client(backend, delayAutomaticFocus: delay, leftButtonDown: { down })
+            await start(client); backend.calls.removeAll()
+            var published = 0
+            client.onUpdate = { _, _ in published += 1 }
+            client.scheduleFocusRefresh(11, native: true)
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            XCTAssertEqual(published, delay ? 0 : 1, "Only the 300 ms setting waits for a quiet focus")
+            await waitFor { client.snapshot?.focusedWindow?.id == 11 }
+            down = true
+            client.scheduleFocusRefresh(10, native: true)
+            client.delayAutomaticFocus = !delay
+            try? await Task.sleep(nanoseconds: YabaiClient.quietPeriod + 50_000_000)
+            XCTAssertEqual(published, 1, "Changing the delay must not bypass the held-button gate")
+            XCTAssertEqual(client.snapshot?.focusedWindow?.id, 11)
+            down = false
+            client.resumeDeferredAfterMouseUp()
+            await waitFor { client.snapshot?.focusedWindow?.id == 10 }
+            XCTAssertEqual(published, 2)
+            XCTAssertTrue(backend.queryCalls.isEmpty)
+            await client.stop()
+        }
+    }
+
+    func testZeroFocusDelayKeepsWindowAndFullRefreshQuietPeriod() async {
+        for full in [false, true] {
+            let backend = Backend(); let client = client(backend, delayAutomaticFocus: false)
+            await start(client); backend.calls.removeAll()
+            let before = client.status.lastUpdated
+            if full { client.scheduleRefresh() } else { client.scheduleMoveRefresh() }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            XCTAssertTrue(backend.queryCalls.isEmpty, "The zero setting applies only to pure focus")
+            await waitFor { client.status.lastUpdated != before }
+            XCTAssertEqual(backend.queryCalls.count, full ? 3 : 1)
+            await client.stop()
+        }
     }
 
     func testActivationIsNotLostWhenItsAXWindowIsUnmanaged() async {

@@ -4,6 +4,7 @@
 // 必需输入：窗口成员和事件回调。预期输出：移动、标题变化、重同步或权限丢失事件。
 // Adapted from a-bar/Services/YabaiWindowEvents.swift.
 import ApplicationServices
+import CoreGraphics
 import Foundation
 import Darwin
 
@@ -18,11 +19,26 @@ final class YabaiWindowEvents {
         case permissionLost
         case subscriptionStatus(complete: Bool)
     }
-    typealias Subscribe = (pid_t, @escaping (Event) -> Void) -> (() -> Void)?
+    enum WindowNotification: Equatable { case focus, title }
+
+    enum Observation {
+        case event(Event)
+        case window(AXUIElement, WindowNotification)
+    }
+
+    enum ReadResult<Value> {
+        case value(Value?)
+        case deferred
+    }
+
+    typealias Subscribe = (pid_t, @escaping (Observation) -> Void) -> (() -> Void)?
+    typealias Resolve = (pid_t, AXUIElement, WindowNotification, () -> Bool) -> ReadResult<Event>
 
     private let trusted: () -> Bool
     private let subscribe: Subscribe
     private let titleReader: (AXUIElement) -> String?
+    private let leftButtonDown: () -> Bool
+    private let resolve: Resolve
     let supportsTitles: Bool
     private var worker: Worker?
     private var generation = 0
@@ -30,14 +46,22 @@ final class YabaiWindowEvents {
 
     var isTrusted: Bool { trusted() }
 
+    static func isLeftButtonDown() -> Bool {
+        CGEventSource.buttonState(.combinedSessionState, button: .left)
+    }
+
     init(trusted: @escaping () -> Bool = AXIsProcessTrusted,
          subscribe: @escaping Subscribe = YabaiWindowEvents.subscribeNative,
          titleReader: @escaping (AXUIElement) -> String? = YabaiWindowEvents.readNativeTitle,
-         supportsTitles: Bool = YabaiWindowEvents.nativeWindowIDReader != nil) {
+         supportsTitles: Bool = YabaiWindowEvents.nativeWindowIDReader != nil,
+         leftButtonDown: @escaping () -> Bool = YabaiWindowEvents.isLeftButtonDown,
+         resolve: @escaping Resolve = YabaiWindowEvents.resolveWindowNotification) {
         self.trusted = trusted
         self.subscribe = subscribe
         self.titleReader = titleReader
         self.supportsTitles = supportsTitles
+        self.leftButtonDown = leftButtonDown
+        self.resolve = resolve
     }
 
     /// Main-thread lifecycle, matching YabaiService.
@@ -59,7 +83,7 @@ final class YabaiWindowEvents {
         }
         if worker == nil {
             let current = generation
-            worker = Worker(subscribe: subscribe) { [weak self] event in
+            worker = Worker(subscribe: subscribe, leftButtonDown: leftButtonDown, resolve: resolve) { [weak self] event in
                 DispatchQueue.main.async { [weak self] in
                     guard let self, current == self.generation else { return }
                     self.handler?(event)
@@ -69,40 +93,48 @@ final class YabaiWindowEvents {
         worker?.perform { $0.update(membership) }
     }
 
+    func resumeAfterMouseUp() {
+        worker?.perform { $0.flushWindowNotifications() }
+    }
+
     @MainActor
-    func readTitle(_ element: AXUIElement) async -> String? {
-        guard let worker else { return nil }
+    func readTitle(_ element: AXUIElement, automatic: Bool = false) async -> ReadResult<String> {
+        guard let worker else { return .value(nil) }
         let current = generation
-        let reader = titleReader
-        let title = await withCheckedContinuation { continuation in
+        let reader = titleReader, leftButtonDown = leftButtonDown
+        let result = await withCheckedContinuation { (continuation: CheckedContinuation<ReadResult<String>, Never>) in
             worker.perform { state in
+                guard !automatic || !leftButtonDown() else { continuation.resume(returning: .deferred); return }
                 let title = reader(element)
                 // Reconciliation can change the service title without an AX event.
                 state.invalidateTitle(element)
-                continuation.resume(returning: title)
+                continuation.resume(returning: .value(title))
             }
         }
-        return current == generation ? title : nil
+        return current == generation ? result : .value(nil)
     }
 
-    /// Reads an app's focused window on the AX thread; used only after interaction has gone quiet.
+    /// Reads an app's focused window on the AX thread after interaction has gone quiet.
     @MainActor
-    func readFocusedWindow(pid: pid_t) async -> Int? {
-        guard let worker else { return nil }
+    func readFocusedWindow(pid: pid_t) async -> ReadResult<Int> {
+        guard let worker else { return .value(nil) }
         let current = generation
-        let id: Int? = await withCheckedContinuation { (continuation: CheckedContinuation<Int?, Never>) in
+        let leftButtonDown = leftButtonDown
+        let result = await withCheckedContinuation { (continuation: CheckedContinuation<ReadResult<Int>, Never>) in
             worker.perform { _ in
+                guard !leftButtonDown() else { continuation.resume(returning: .deferred); return }
                 let application = AXUIElementCreateApplication(pid)
                 AXUIElementSetMessagingTimeout(application, 0.2)
                 var value: CFTypeRef?
                 guard AXUIElementCopyAttributeValue(application, kAXFocusedWindowAttribute as CFString, &value) == .success,
                       let value, CFGetTypeID(value) == AXUIElementGetTypeID() else {
-                    continuation.resume(returning: nil); return
+                    continuation.resume(returning: .value(nil)); return
                 }
-                continuation.resume(returning: YabaiWindowEvents.windowID(for: value as! AXUIElement))
+                guard !leftButtonDown() else { continuation.resume(returning: .deferred); return }
+                continuation.resume(returning: .value(YabaiWindowEvents.windowID(for: value as! AXUIElement)))
             }
         }
-        return current == generation ? id : nil
+        return current == generation ? result : .value(nil)
     }
 
     func stop() {
@@ -122,8 +154,9 @@ final class YabaiWindowEvents {
         private let state: State
         private let runLoop: CFRunLoop
 
-        init(subscribe: @escaping Subscribe, handler: @escaping (Event) -> Void) {
-            let state = State(subscribe: subscribe, handler: handler)
+        init(subscribe: @escaping Subscribe, leftButtonDown: @escaping () -> Bool,
+             resolve: @escaping Resolve, handler: @escaping (Event) -> Void) {
+            let state = State(subscribe: subscribe, leftButtonDown: leftButtonDown, resolve: resolve, handler: handler)
             self.state = state
             let ready = DispatchSemaphore(value: 0)
             // The thread owns State rather than Worker, so releasing the owner can stop it.
@@ -162,13 +195,26 @@ final class YabaiWindowEvents {
             var windows: Set<Int>
             var titles: [(AXUIElement, String?)] = []
         }
+        private struct PendingNotification {
+            let pid: pid_t
+            let element: AXUIElement
+            let kind: WindowNotification
+        }
+
         var runLoop: CFRunLoop?
         private let subscribe: Subscribe
+        private let leftButtonDown: () -> Bool
+        private let resolve: Resolve
         private let handler: (Event) -> Void
         private var entries: [pid_t: Entry] = [:]
+        private var pending: [PendingNotification] = []
+        private var releaseCheck: Timer?
 
-        init(subscribe: @escaping Subscribe, handler: @escaping (Event) -> Void) {
+        init(subscribe: @escaping Subscribe, leftButtonDown: @escaping () -> Bool,
+             resolve: @escaping Resolve, handler: @escaping (Event) -> Void) {
             self.subscribe = subscribe
+            self.leftButtonDown = leftButtonDown
+            self.resolve = resolve
             self.handler = handler
         }
 
@@ -176,6 +222,7 @@ final class YabaiWindowEvents {
             var added = false
             for pid in Array(entries.keys) where membership[pid] == nil {
                 entries.removeValue(forKey: pid)?.cancel()
+                pending.removeAll { $0.pid == pid }
             }
             for (pid, windows) in membership {
                 if let old = entries[pid] {
@@ -183,7 +230,7 @@ final class YabaiWindowEvents {
                         entries[pid]?.windows = windows
                         entries[pid]?.titles.removeAll()
                     }
-                } else if let cancel = subscribe(pid, { [weak self] event in self?.receive(event, pid: pid) }) {
+                } else if let cancel = subscribe(pid, { [weak self] observation in self?.receive(observation, pid: pid) }) {
                     entries[pid] = Entry(cancel: cancel, windows: windows)
                     added = true
                 }
@@ -198,7 +245,43 @@ final class YabaiWindowEvents {
             }
         }
 
-        private func receive(_ event: Event, pid: pid_t) {
+        private func receive(_ observation: Observation, pid: pid_t) {
+            guard entries[pid] != nil else { return }
+            switch observation {
+            case .event(let event):
+                deliver(event, pid: pid)
+            case .window(let element, let kind):
+                // Coalesce by element before reading its window ID. Focus only needs the latest target.
+                pending.removeAll {
+                    $0.kind == kind && (kind == .focus || ($0.pid == pid && CFEqual($0.element, element)))
+                }
+                pending.append(PendingNotification(pid: pid, element: element, kind: kind))
+                flushWindowNotifications()
+            }
+        }
+
+        func flushWindowNotifications() {
+            while !pending.isEmpty, !leftButtonDown() {
+                // A queued title lookup must not delay the latest focus after release.
+                let index = pending.firstIndex { $0.kind == .focus } ?? pending.startIndex
+                let next = pending[index]
+                guard case .value(let event) = resolve(next.pid, next.element, next.kind, leftButtonDown) else { break }
+                pending.remove(at: index)
+                if let event { deliver(event, pid: next.pid) }
+            }
+            if pending.isEmpty {
+                releaseCheck?.invalidate()
+                releaseCheck = nil
+            } else if releaseCheck == nil {
+                // Only retry when the mouse-up monitor may have missed a release.
+                releaseCheck = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self] _ in
+                    self?.releaseCheck = nil
+                    self?.flushWindowNotifications()
+                }
+            }
+        }
+
+        private func deliver(_ event: Event, pid: pid_t) {
             guard var entry = entries[pid] else { return }
             switch event {
             case .moved, .resynchronized, .permissionLost, .subscriptionStatus:
@@ -224,13 +307,16 @@ final class YabaiWindowEvents {
         }
 
         func stop() {
+            releaseCheck?.invalidate()
+            releaseCheck = nil
+            pending.removeAll()
             for entry in entries.values { entry.cancel() }
             entries.removeAll()
         }
     }
 
-    private static func subscribeNative(pid: pid_t, handler: @escaping (Event) -> Void) -> (() -> Void)? {
-        let subscription = AXSubscription(pid: pid, handler: handler)
+    private static func subscribeNative(pid: pid_t, handler: @escaping (Observation) -> Void) -> (() -> Void)? {
+        let subscription = AXSubscription(handler: handler)
         var observer: AXObserver?
         guard AXObserverCreate(pid, { _, element, notification, context in
             guard let context else { return }
@@ -273,39 +359,39 @@ final class YabaiWindowEvents {
     private final class AXSubscription {
         var observer: AXObserver?
         var names: [String] = []
-        let handler: (Event) -> Void
-        let pid: pid_t
+        let handler: (Observation) -> Void
 
-        init(pid: pid_t, handler: @escaping (Event) -> Void) {
-            self.pid = pid
+        init(handler: @escaping (Observation) -> Void) {
             self.handler = handler
         }
 
         func receive(_ element: AXUIElement, _ notification: CFString) {
-            if notification as String == kAXWindowMovedNotification {
-                handler(.moved)
-                return
+            switch notification as String {
+            case kAXWindowMovedNotification: handler(.event(.moved))
+            case kAXFocusedWindowChangedNotification: handler(.window(element, .focus))
+            case kAXTitleChangedNotification: handler(.window(element, .title))
+            default: break
             }
-            if notification as String == kAXFocusedWindowChangedNotification {
-                // The window ID alone is enough; no further AX reads while the app may be starting a drag.
-                if let id = YabaiWindowEvents.windowID(for: element) { handler(.focused(id: id, pid: pid)) }
-                return
-            }
-            guard let id = YabaiWindowEvents.windowID(for: element) else {
-                handler(.resynchronized)
-                return
-            }
-            AXUIElementSetMessagingTimeout(element, 0.2)
-            var role: CFTypeRef?
-            let status = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
-            guard status == .success else {
-                handler(.titleChanged(id: id, pid: pid, element: element, title: nil))
-                return
-            }
-            guard role as? String == kAXWindowRole else { return }
-            handler(.titleChanged(id: id, pid: pid, element: element,
-                                  title: YabaiWindowEvents.readNativeTitle(element)))
         }
+    }
+
+    private static func resolveWindowNotification(pid: pid_t, element: AXUIElement,
+                                                  kind: WindowNotification, leftButtonDown: () -> Bool) -> ReadResult<Event> {
+        guard !leftButtonDown() else { return .deferred }
+        let id = windowID(for: element)
+        guard !leftButtonDown() else { return .deferred }
+        if kind == .focus { return .value(id.map { .focused(id: $0, pid: pid) }) }
+        guard let id else { return .value(.resynchronized) }
+
+        AXUIElementSetMessagingTimeout(element, 0.2)
+        var role: CFTypeRef?
+        let status = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
+        guard !leftButtonDown() else { return .deferred }
+        guard status == .success else {
+            return .value(.titleChanged(id: id, pid: pid, element: element, title: nil))
+        }
+        guard role as? String == kAXWindowRole else { return .value(nil) }
+        return .value(.titleChanged(id: id, pid: pid, element: element, title: readNativeTitle(element)))
     }
 
     // AX has no public CGWindowID mapping. Use the same optional SPI as yabai, never title/frame guesses.
