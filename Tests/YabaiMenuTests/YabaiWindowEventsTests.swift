@@ -13,9 +13,6 @@ final class YabaiWindowEventsTests: XCTestCase {
         private let lock = NSLock()
         private var callbacks: [pid_t: Callback] = [:]
         private var registrations: [pid_t] = []
-        private var titleSubscriptions: [Bool] = []
-        var acceptsTitleSubscription = true
-        var acceptsFocusSubscription = true
         private var cancellations: [pid_t] = []
         private var remainingFailures: Int
         private var titleValue: String?
@@ -49,12 +46,10 @@ final class YabaiWindowEventsTests: XCTestCase {
             set { lock.lock(); titleValue = newValue; lock.unlock() }
         }
 
-        var registeredTitles: [Bool] { lock.lock(); defer { lock.unlock() }; return titleSubscriptions }
-
         var registered: [pid_t] { lock.lock(); defer { lock.unlock() }; return registrations }
         var cancelled: [pid_t] { lock.lock(); defer { lock.unlock() }; return cancellations }
 
-        func subscribe(_ pid: pid_t, _ receive: @escaping (YabaiWindowEvents.Observation) -> Void) -> YabaiWindowEvents.Subscription? {
+        func subscribe(_ pid: pid_t, _ receive: @escaping (YabaiWindowEvents.Observation) -> Void) -> (() -> Void)? {
             lock.lock()
             registrations.append(pid)
             if remainingFailures > 0 {
@@ -67,13 +62,9 @@ final class YabaiWindowEventsTests: XCTestCase {
             firstSubscription = nil
             lock.unlock()
             ready?()
-            return YabaiWindowEvents.Subscription(cancel: { [self] in
+            return { [self] in
                 lock.lock(); cancellations.append(pid); lock.unlock()
-            }, hasFocus: acceptsFocusSubscription, setTitleTracking: { [self] enabled in
-                lock.lock(); defer { lock.unlock() }
-                titleSubscriptions.append(enabled)
-                return enabled && acceptsTitleSubscription
-            })
+            }
         }
 
         func emitInline(_ event: YabaiWindowEvents.Event, pid: pid_t = 123) {
@@ -90,34 +81,6 @@ final class YabaiWindowEventsTests: XCTestCase {
             CFRunLoopPerformBlock(callback.loop, CFRunLoopMode.defaultMode.rawValue) { callback.receive(observation) }
             CFRunLoopWakeUp(callback.loop)
         }
-    }
-
-    @MainActor
-    func testFailingTitleRegistrationPreservesMovementAndFocus() async throws {
-        let backend = Backend()
-        backend.acceptsTitleSubscription = false
-        let source = YabaiWindowEvents(trusted: { true }, subscribe: backend.subscribe)
-        var routed = false, moved = false, focused = false
-        source.start {
-            switch $0 {
-            case .subscriptionStatus(let complete, let titles, let focus):
-                routed = complete && !titles && focus
-            case .moved: moved = true
-            case .focused: focused = true
-            default: break
-            }
-        }
-        defer { source.stop() }
-        let rows = try windows([10])
-        source.update(rows)
-        await waitFor { routed }
-        backend.emit(.moved)
-        backend.emit(.focused(id: 10, pid: 123))
-        await waitFor { moved && focused }
-        source.setTitleDemand(false)
-        source.update(rows, tracksTitles: false)
-        XCTAssertEqual(backend.registered, [123])
-        XCTAssertTrue(backend.cancelled.isEmpty)
     }
 
     private func windows(_ ids: [Int], pid: Int = 123) throws -> [Window] {
@@ -249,6 +212,7 @@ final class YabaiWindowEventsTests: XCTestCase {
     @MainActor
     func testRawAXReadsWaitFromMouseDownAndCoalesceBeforeRelease() async throws {
         let backend = Backend(title: "New")
+        backend.buttonDown = true
         let element = AXUIElementCreateApplication(123)
         let newerFocus = AXUIElementCreateApplication(124)
         let events = YabaiWindowEvents(trusted: { true }, subscribe: backend.subscribe,
@@ -273,7 +237,6 @@ final class YabaiWindowEventsTests: XCTestCase {
         }
         events.update(try windows([10, 11]))
         await waitFor { backend.registered == [123] }
-        backend.buttonDown = true
         backend.emitObservation(.window(element, .title))
         backend.emitObservation(.window(element, .focus))
         backend.emitObservation(.window(element, .title))
@@ -303,33 +266,6 @@ final class YabaiWindowEventsTests: XCTestCase {
         backend.buttonDown = false
         // The pending-only timer also recovers when no mouse-up notification is delivered.
         await waitFor { titles == ["New", "Newest"] }
-    }
-
-    @MainActor
-    func testSubscriptionChangesWaitAndOnlyApplyLatestMembership() async throws {
-        let backend = Backend()
-        let events = YabaiWindowEvents(trusted: { true }, subscribe: backend.subscribe,
-                                       leftButtonDown: { backend.buttonDown })
-        defer { events.stop() }
-        events.start { _ in }
-        events.update(try windows([10]), tracksTitles: false)
-        await waitFor { backend.registered == [123] }
-
-        backend.buttonDown = true
-        events.update(try windows([11], pid: 124), tracksTitles: true)
-        events.setTitleDemand(false)
-        events.update(try windows([12], pid: 125), tracksTitles: false)
-        // The read is a worker barrier; demand is off, so it performs no AX I/O.
-        _ = await events.readTitle(AXUIElementCreateApplication(123), automatic: true)
-        XCTAssertEqual(backend.registered, [123])
-        XCTAssertTrue(backend.cancelled.isEmpty)
-        XCTAssertTrue(backend.registeredTitles.isEmpty)
-
-        backend.buttonDown = false
-        events.resumeAfterMouseUp()
-        await waitFor { backend.registered == [123, 125] }
-        XCTAssertEqual(backend.cancelled, [123])
-        XCTAssertTrue(backend.registeredTitles.isEmpty)
     }
 
     func testMissingOrInvalidWindowIDBridgeCannotGuessAnIdentity() {

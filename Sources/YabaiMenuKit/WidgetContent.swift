@@ -49,13 +49,12 @@ struct WidgetContent {
             let all = grouped[space.index] ?? []
             // Empty-space visibility follows real occupancy, before icon exclusions and sticky separation.
             guard !settings.hideEmptySpaces || space.focused || space.visible || !all.isEmpty else { return nil }
-            // The empty-Space test above still needs occupancy when icons are disabled.
-            let active = space.visible && (display.map { $0 == space.display } ?? space.focused)
-            guard settings.showSpaceIcons else { return Group(space: space, windows: [], active: active) }
             var windows = all.filter { (!settings.separateSticky || !$0.sticky) && !excluded($0.app) && !excluded($0.title, title: true) }
             if settings.hideDuplicateApps { windows = deduplicate(windows) }
             windows.sort { ($0.app, $0.id) < ($1.app, $1.id) }
-            return Group(space: space, windows: windows, active: active)
+            // Each host accents its own current Space; other displays retain the separate visible color.
+            let active = space.visible && (display.map { $0 == space.display } ?? space.focused)
+            return Group(space: space, windows: settings.showSpaceIcons ? windows : [], active: active)
         }
         // a-bar keeps this independent group outside Space/app exclusion rules.
         sticky = settings.separateSticky && settings.spaceScope != .hidden ? deduplicate(visible.filter(\.sticky)) : []

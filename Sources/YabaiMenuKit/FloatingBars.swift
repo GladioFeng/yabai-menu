@@ -92,8 +92,7 @@ final class FloatingBars {
     }
 
     func update(_ snapshot: Snapshot, settings: AppSettings, status: ConnectionStatus,
-                icon: (Window) -> NSImage?, menu: @escaping (BarTarget) -> NSMenu?, select: @escaping (BarTarget) -> Void,
-                loadTitle: WidgetBarView.LoadTitle? = nil) {
+                icon: (Window) -> NSImage?, menu: @escaping (BarTarget) -> NSMenu?, select: @escaping (BarTarget) -> Void) {
         guard settings.effectivePlacement != .menuBar else { close(); return }
         let connected = screens(snapshot)
         let ids = Set(connected.map(\.id))
@@ -113,7 +112,6 @@ final class FloatingBars {
             if host.handle.isDragging { continue }
             host.bar.onSelect = select
             host.bar.contextMenu = menu
-            host.bar.loadTitle = loadTitle
             let handleWidth: CGFloat = settings.effectivePlacement == .floating ? 18 : 0
             let horizontal = CGFloat(settings.barHorizontalPadding), vertical = CGFloat(settings.barVerticalPadding)
             let appearance = settings.colorPreset.appearance

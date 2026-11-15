@@ -9,18 +9,6 @@ final class ClientTests: XCTestCase {
         var focusedSpace = 1
         var failQueries = false
         var signals = "[]"
-        var windows = "[]"
-        var windowOwner: Int32?
-        var nextTargetedWindowError: MenuError?
-        var missionControlActive = false
-        var activeSpaceUnavailable = false
-        var spaceDisplays: [Int: Int] = [:]
-        var holdWindowFocusQuery = false
-        var releaseWindowFocusQuery: CheckedContinuation<Void, Never>?
-        var holdSpaceQuery = false
-        var releaseSpaceQuery: CheckedContinuation<Void, Never>?
-        var releaseSignalList: CheckedContinuation<Void, Never>?
-        var holdSignalList = false
         var failSignals = false
         var failFocus = false
         var holdSpace = false
@@ -38,47 +26,16 @@ final class ClientTests: XCTestCase {
             if args.contains("signal") {
                 if args.contains("--remove") { return Data() }
                 if failSignals { throw MenuError.message("signal unavailable") }
-                if args.contains("--list") {
-                    if holdSignalList { await withCheckedContinuation { releaseSignalList = $0 } }
-                    return Data(signals.utf8)
-                }
+                if args.contains("--list") { return Data(signals.utf8) }
                 if holdRegistration { await withCheckedContinuation { releaseRegistration = $0 } }
                 return Data()
             }
             if args.contains("query") {
                 if failQueries { throw MenuError.message("connection refused") }
-                if args == ["-m", "query", "--windows", "id,pid"], let windowOwner {
-                    return try JSONSerialization.data(withJSONObject: [["id": 10, "pid": windowOwner]])
-                }
-                if args.count == 6, args[2] == "--windows", args[4] == "--window", let windowOwner, let id = Int(args[5]) {
-                    if holdWindowFocusQuery {
-                        holdWindowFocusQuery = false
-                        await withCheckedContinuation { releaseWindowFocusQuery = $0 }
-                    }
-                    if let error = nextTargetedWindowError {
-                        nextTargetedWindowError = nil
-                        throw error
-                    }
-                    return try JSONSerialization.data(withJSONObject: ["id": id, "pid": windowOwner])
-                }
-                if args.contains("--windows") { return Data(windows.utf8) }
+                if args.contains("--windows") { return Data("[]".utf8) }
                 if args.contains("--displays") { return Data("[{\"id\":101,\"index\":1,\"uuid\":\"test-display\"}]".utf8) }
-                if args == ["-m", "query", "--spaces"], holdSpaceQuery {
-                    holdSpaceQuery = false
-                    await withCheckedContinuation { releaseSpaceQuery = $0 }
-                }
-                let spaces = (1...4).filter { !removed.contains($0) }.map { id -> [String: Any] in
-                    let focused = id == focusedSpace
-                    let display = spaceDisplays[id] ?? 1
-                    let visible = focused || spaceDisplays[id] != nil
-                    return ["id": id, "index": indices[id - 1], "display": display, "label": "",
-                            "type": "bsp", "has-focus": focused, "is-visible": visible]
-                }
-                if args.last == "--space" {
-                    guard !activeSpaceUnavailable, let active = spaces.first(where: { $0["id"] as? Int == focusedSpace }) else {
-                        throw MenuError.activeSpaceUnavailable
-                    }
-                    return try JSONSerialization.data(withJSONObject: active)
+                let spaces: [[String: Any]] = (1...4).filter { !removed.contains($0) }.map {
+                    ["id": $0, "index": indices[$0 - 1], "display": 1, "label": "", "type": "bsp", "has-focus": $0 == focusedSpace, "is-visible": $0 == focusedSpace]
                 }
                 return try JSONSerialization.data(withJSONObject: spaces)
             }
@@ -89,7 +46,6 @@ final class ClientTests: XCTestCase {
             if args.contains("--focus") {
                 if failFocus { throw MenuError.message("focus unavailable") }
                 if args[1] == "space" {
-                    if missionControlActive { throw MenuError.message("cannot focus space because mission-control is active.") }
                     if holdSpace { await withCheckedContinuation { releaseSpace = $0 }; holdSpace = false }
                     if focusedSpace == Int(args.last!) { throw MenuError.alreadyFocusedSpace }
                     focusedSpace = Int(args.last!)!
@@ -99,12 +55,10 @@ final class ClientTests: XCTestCase {
         }
     }
 
-    private func makeClient(_ fake: FakeYabai, register: YabaiClient.Register? = nil,
-                            tracksWindowTitles: Bool = true, leftButtonDown: @escaping () -> Bool = { false }) -> YabaiClient {
+    private func makeClient(_ fake: FakeYabai, register: YabaiClient.Register? = nil) -> YabaiClient {
         // Fake displays must not depend on whether the physical test host is asleep.
         YabaiClient(path: "/fake/yabai", notification: "test.yabai-menu.\(UUID().uuidString)", run: fake.run, register: register,
-                    windowEvents: YabaiWindowEvents(trusted: { false }, supportsTitles: true), displaysAwake: { true },
-                    tracksWindowTitles: tracksWindowTitles, leftButtonDown: leftButtonDown)
+                    windowEvents: YabaiWindowEvents(trusted: { false }, supportsTitles: true), displaysAwake: { true })
     }
 
     private func waitUntil(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async {
@@ -128,186 +82,6 @@ final class ClientTests: XCTestCase {
         XCTAssertEqual(fake.commands.filter { $0.contains("--focus") }, [
             ["-m", "space", "--focus", "2"], ["-m", "space", "--focus", "4"], ["-m", "window", "--focus", "41"]])
         await active.stop()
-    }
-
-    func testWindowSelectionRechecksPIDBeforeSendingFocus() async {
-        let fake = FakeYabai()
-        fake.windows = #"[{"id":10,"pid":123,"app":"Fixture","space":1,"has-focus":true,"is-floating":false,"is-sticky":false,"is-hidden":false,"is-minimized":false,"stack-index":0,"frame":{"x":0}}]"#
-        fake.windowOwner = 456
-        let client = makeClient(fake)
-        client.start(observeSystem: false)
-        await waitUntil { client.status.mode == .live && client.snapshot?.windows.first?.pid == 123 }
-
-        client.focus(space: 2, window: 10, expectedPID: 123)
-        await waitUntil { !client.status.isSwitching }
-        XCTAssertFalse(fake.commands.contains { $0.contains("--focus") })
-        XCTAssertNotNil(client.status.actionError)
-
-        fake.windowOwner = 123
-        client.focus(space: nil, window: 10, expectedPID: 123)
-        await waitUntil { !client.status.isSwitching }
-        XCTAssertEqual(Array(fake.commands.suffix(2)), [
-            ["-m", "query", "--windows", "id,pid", "--window", "10"],
-            ["-m", "window", "--focus", "10"]
-        ])
-        XCTAssertNil(client.status.actionError)
-
-        fake.holdSpace = true
-        client.focus(space: 2, window: 10, expectedPID: 123)
-        await waitUntil { fake.releaseSpace != nil }
-        fake.windowOwner = 456
-        fake.releaseSpace?.resume()
-        await waitUntil { !client.status.isSwitching }
-        XCTAssertEqual(Array(fake.commands.suffix(3)), [
-            ["-m", "query", "--windows", "id,pid"],
-            ["-m", "space", "--focus", "2"],
-            ["-m", "query", "--windows", "id,pid", "--window", "10"]
-        ])
-        XCTAssertNotNil(client.status.actionError)
-        await client.stop()
-    }
-
-    private func makeVisibleWindowFixture() -> FakeYabai {
-        let fake = FakeYabai()
-        fake.windows = #"[{"id":10,"pid":123,"app":"Fixture","space":1,"display":1,"has-focus":false,"is-visible":true,"is-floating":false,"is-sticky":false,"is-hidden":false,"is-minimized":false,"stack-index":0,"frame":{"x":0}}]"#
-        fake.windowOwner = 123
-        return fake
-    }
-
-    func testCurrentSpaceUsesOneOwnerQueryAndKeepsTheSpaceFocusGuard() async {
-        let fake = makeVisibleWindowFixture()
-        let client = makeClient(fake)
-        client.start(observeSystem: false)
-        await waitUntil { client.status.mode == .live && client.snapshot?.windows.first?.pid == 123 }
-        fake.commands.removeAll()
-        client.focus(space: 1, window: 10, expectedPID: 123)
-        await waitUntil { !client.status.isSwitching }
-        XCTAssertFalse(fake.commands.contains(["-m", "query", "--spaces"]))
-        XCTAssertTrue(fake.commands.contains { $0.contains("--spaces") && $0.last == "--space" })
-        XCTAssertEqual(fake.commands.filter { $0.contains("--window") }, [
-            ["-m", "query", "--windows", "id,pid", "--window", "10"]
-        ])
-        XCTAssertEqual(fake.commands.filter { $0.contains("--focus") }, [
-            ["-m", "space", "--focus", "1"], ["-m", "window", "--focus", "10"]
-        ])
-        XCTAssertNil(client.status.actionError)
-
-        fake.commands.removeAll()
-        fake.windowOwner = 456
-        client.focus(space: 1, window: 10, expectedPID: 123)
-        await waitUntil { !client.status.isSwitching }
-        XCTAssertFalse(fake.commands.contains { $0.contains("--focus") })
-        XCTAssertNotNil(client.status.actionError)
-        await client.stop()
-    }
-
-    func testAnotherActiveDisplayStillRequiresExplicitSpaceFocus() async {
-        for activeUnavailable in [false, true] {
-            let fake = makeVisibleWindowFixture()
-            fake.spaceDisplays = [1: 1, 2: 2]
-            let client = makeClient(fake)
-            client.start(observeSystem: false)
-            await waitUntil { client.status.mode == .live }
-
-            fake.focusedSpace = 2  // Space 1 remains visible, but its display is no longer active.
-            fake.activeSpaceUnavailable = activeUnavailable
-            fake.nextTargetedWindowError = .windowUnavailable
-            fake.commands.removeAll()
-            client.focus(space: 1, window: 10, expectedPID: 123)
-
-            await waitUntil { !client.status.isSwitching }
-            XCTAssertTrue(fake.commands.contains(["-m", "query", "--spaces"]))
-            XCTAssertEqual(fake.commands.filter { $0.contains("--focus") }, [
-                ["-m", "space", "--focus", "1"], ["-m", "window", "--focus", "10"]
-            ])
-            XCTAssertNil(client.status.actionError)
-            await client.stop()
-        }
-    }
-
-    func testCurrentSpaceCannotFocusAWindowDuringMissionControl() async {
-        let fake = makeVisibleWindowFixture()
-        let client = makeClient(fake)
-        client.start(observeSystem: false)
-        await waitUntil { client.status.mode == .live }
-        fake.missionControlActive = true
-        client.focus(space: 1, window: 10, expectedPID: 123)
-        await waitUntil { !client.status.isSwitching }
-        XCTAssertEqual(fake.commands.filter { $0.contains("--focus") }, [["-m", "space", "--focus", "1"]])
-        XCTAssertTrue(client.status.actionError?.contains("mission-control") == true)
-        await client.stop()
-    }
-
-    func testOwnerLookupTimeoutIsNotFollowedByASerialSpaceRetry() async {
-        let fake = makeVisibleWindowFixture()
-        let client = makeClient(fake)
-        client.start(observeSystem: false)
-        await waitUntil { client.status.mode == .live }
-        fake.commands.removeAll()
-        fake.nextTargetedWindowError = .message("Command timed out.")
-        client.focus(space: 1, window: 10, expectedPID: 123)
-        await waitUntil { !client.status.isSwitching }
-        XCTAssertFalse(fake.commands.contains(["-m", "query", "--spaces"]))
-        XCTAssertEqual(fake.commands.filter { $0.contains("--window") }.count, 1)
-        XCTAssertFalse(fake.commands.contains { $0.contains("--focus") })
-        XCTAssertTrue(client.status.actionError?.contains("timed out") == true)
-        await client.stop()
-    }
-
-    func testNewFocusSupersedesWindowWaitingOnFastPathLookup() async {
-        let fake = makeVisibleWindowFixture()
-        let client = makeClient(fake)
-        client.start(observeSystem: false)
-        await waitUntil { client.status.mode == .live }
-        fake.holdWindowFocusQuery = true
-        client.focus(space: 1, window: 10, expectedPID: 123)
-        await waitUntil {
-            fake.releaseWindowFocusQuery != nil && fake.commands.contains { $0.contains("--spaces") && $0.last == "--space" }
-        }
-        client.focus(space: 2, window: nil)
-        fake.releaseWindowFocusQuery?.resume()
-        await waitUntil { !client.status.isSwitching }
-        XCTAssertEqual(fake.commands.filter { $0.contains("--focus") }, [["-m", "space", "--focus", "2"]])
-        await client.stop()
-    }
-
-    func testNewFocusSupersedesOldSelectionWaitingOnSpaceLookup() async {
-        let fake = FakeYabai()
-        let client = makeClient(fake)
-        client.start(observeSystem: false)
-        await waitUntil { client.status.mode == .live }
-        fake.holdSpaceQuery = true
-        client.focus(space: 2, window: nil)
-        await waitUntil { fake.releaseSpaceQuery != nil }
-        client.focus(space: 3, window: nil)
-        fake.releaseSpaceQuery?.resume()
-        await waitUntil { !client.status.isSwitching }
-        XCTAssertEqual(fake.commands.filter { $0.contains("--focus") }, [["-m", "space", "--focus", "3"]])
-        await client.stop()
-    }
-
-    func testPostActionRefreshAndPublicationWaitForNewMouseHold() async throws {
-        var held = false
-        let fake = FakeYabai()
-        let client = makeClient(fake, leftButtonDown: { held })
-        client.start(observeSystem: false)
-        await waitUntil { client.status.mode == .live }
-        fake.holdSpace = true
-        client.focus(space: 2, window: nil)
-        await waitUntil { fake.releaseSpace != nil }
-        var published = 0
-        client.onUpdate = { _, _ in published += 1 }
-        fake.commands.removeAll()
-        held = true
-        fake.releaseSpace?.resume()
-        await waitUntil { !client.status.isSwitching }
-        try await Task.sleep(nanoseconds: 200_000_000)
-        XCTAssertFalse(fake.commands.contains { $0.contains("query") })
-        XCTAssertEqual(published, 0)
-        held = false
-        client.resumeDeferredAfterMouseUp()
-        await waitUntil { client.snapshot?.focusedSpace?.index == 2 && published > 0 }
-        await client.stop()
     }
 
     func testActionFailureIsNotClearedBySuccessfulRefresh() async {
@@ -399,7 +173,7 @@ final class ClientTests: XCTestCase {
 
     func testNativeMoveBurstUsesABarTrailingDelay() async {
         let fake = FakeYabai()
-        let client = makeClient(fake, tracksWindowTitles: false)
+        let client = makeClient(fake)
         client.start(observeSystem: false)
         await waitUntil { client.status.mode == .live }
         let before = fake.commands.filter { $0.contains("--windows") }.count
@@ -422,55 +196,23 @@ final class ClientTests: XCTestCase {
         XCTAssertEqual(fake.commands.count, stopped)
     }
 
-    func testTitleFallbackSignalFollowsSettingsWithoutRemovingFocusFallbacks() async {
+    func testNativeFocusRetiresYabaiFocusDisplayAndSpaceSignals() async {
         let fake = FakeYabai()
-        fake.signals = #"[{"label":"yabai-menu-window_title_changed","event":"window_title_changed","action":"old"}]"#
-        var callbacks: [String: () -> Void] = [:]
-        let client = YabaiClient(path: "/fake/yabai", notification: "test.title-fallback", run: fake.run,
-            register: { name, callback in callbacks[name] = callback; return 0 },
-            windowEvents: YabaiWindowEvents(trusted: { false }, supportsTitles: false), displaysAwake: { true },
-            tracksWindowTitles: false, leftButtonDown: { false })
-        client.start(observeSystem: false)
-        await waitUntil { client.snapshot != nil }
-        let titleEvent = "event=window_title_changed", label = "yabai-menu-window_title_changed"
-        let titleChannel = "test.title-fallback.window-title-changed"
-        XCTAssertNil(callbacks[titleChannel])
-        XCTAssertTrue(fake.commands.contains(["-m", "signal", "--remove", label]))
-        XCTAssertTrue(fake.commands.contains { $0.contains("event=window_focused") })
-        XCTAssertFalse(fake.commands.contains { $0.contains(titleEvent) })
-        client.setWindowTitleTracking(true)
-        await waitUntil { fake.commands.contains { $0.contains(titleEvent) } && callbacks[titleChannel] != nil }
-        try? await Task.sleep(nanoseconds: 70_000_000)
-        let oldCallback = callbacks[titleChannel]
-        let removals = fake.commands.filter { $0 == ["-m", "signal", "--remove", label] }.count
-        let lastUpdate = client.status.lastUpdated
-        client.setWindowTitleTracking(false)
-        await waitUntil { fake.commands.filter { $0 == ["-m", "signal", "--remove", label] }.count > removals
-            && client.status.lastUpdated != lastUpdate }
-        let count = fake.commands.count
-        oldCallback?()
-        try? await Task.sleep(nanoseconds: YabaiClient.quietPeriod + 20_000_000)
-        XCTAssertEqual(fake.commands.count, count, "A late title-only signal must not start a query")
-        await client.stop()
-    }
-
-    func testNativeFocusKeepsYabaiWindowFocusSignal() async {
-        let fake = FakeYabai()
-        fake.signals = #"[{"label":"yabai-menu-window_focused","event":"window_focused","action":"old"},{"label":"yabai-menu-space_changed","event":"space_changed","action":"old"},{"label":"yabai-menu-display_changed","event":"display_changed","action":"old"}]"#
-        fake.windows = #"[{"id":10,"pid":123,"app":"Fixture","title":"","space":1,"has-focus":true,"is-floating":false,"is-sticky":false,"is-hidden":false,"is-minimized":false,"stack-index":0,"frame":{"x":0}}]"#
-        let events = YabaiWindowEvents(trusted: { true }, subscribe: { _, _ in .init(cancel: {}, hasFocus: true, setTitleTracking: { $0 }) }, supportsTitles: true)
+        fake.signals = #"[{"label":"yabai-menu-window_focused","event":"window_focused","action":"old"},{"label":"yabai-menu-space_changed","event":"space_changed","action":"old"}]"#
+        let events = YabaiWindowEvents(trusted: { true }, subscribe: { _, _ in {} }, supportsTitles: true)
         let client = YabaiClient(path: "/fake/yabai", notification: "test.yabai-menu.\(UUID().uuidString)", run: fake.run,
                                  register: { _, _ in 0 }, windowEvents: events, displaysAwake: { true })
         client.startWindowObservation()
         client.start(observeSystem: false)
         await waitUntil { client.status.mode == .live }
-        await waitUntil {
-            let removed = fake.commands.filter { $0.contains("--remove") }.compactMap(\.last)
-            return YabaiClient.nativeFocusEvents.allSatisfy { removed.contains("yabai-menu-\($0)") }
+        let added = fake.commands.filter { $0.contains("--add") }.compactMap { $0.first { $0.hasPrefix("event=") } }
+        for event in YabaiClient.nativeFocusEvents {
+            XCTAssertFalse(added.contains("event=\(event)"), "\(event) must not make yabai spawn a shell per change")
         }
-        XCTAssertTrue(fake.commands.contains { $0.contains("event=window_created") })
-        XCTAssertTrue(fake.commands.contains { $0.contains("event=window_focused") })
-        XCTAssertFalse(fake.commands.contains { $0.contains("--remove") && $0.contains("yabai-menu-window_focused") })
+        XCTAssertTrue(added.contains("event=window_created"))
+        let removed = fake.commands.filter { $0.contains("--remove") }.map { $0.last! }
+        XCTAssertTrue(removed.contains("yabai-menu-window_focused"))
+        XCTAssertTrue(removed.contains("yabai-menu-space_changed"))
         await client.stop()
         // Without Accessibility the yabai signals stay as the fallback.
         let plain = FakeYabai(), fallback = makeClient(plain)
@@ -478,21 +220,6 @@ final class ClientTests: XCTestCase {
         await waitUntil { fallback.status.mode == .live }
         XCTAssertTrue(plain.commands.contains { $0.contains("event=window_focused") })
         await fallback.stop()
-    }
-
-    func testStoppingDuringSignalListingCannotRegisterALateTitleListener() async {
-        let fake = FakeYabai()
-        fake.holdSignalList = true
-        var registered = [String]()
-        let client = makeClient(fake, register: { key, _ in registered.append(key); return 0 })
-        client.start(observeSystem: false)
-        await waitUntil { fake.releaseSignalList != nil }
-        let stop = Task { await client.stop() }
-        await Task.yield()
-        fake.releaseSignalList?.resume()
-        await stop.value
-        XCTAssertFalse(registered.contains { $0.hasSuffix(".window-title-changed") })
-        XCTAssertFalse(fake.commands.contains { $0.contains("--add") })
     }
 
     func testStopDuringRegistrationCannotAddLateSignals() async {
@@ -514,16 +241,14 @@ final class ClientTests: XCTestCase {
         let fake = FakeYabai()
         fake.signals = #"[{"label":"yabai-menu-window_moved","event":"window_moved","action":"old"},{"label":"yabai-menu-window_resized","event":"window_resized","action":"old"},{"label":"yabai-menu-window_title_changed","event":"window_title_changed","action":"old"},{"label":"other-window_moved","event":"window_moved","action":"leave-alone"}]"#
         var callbacks: [String: () -> Void] = [:]
-        let client = makeClient(fake, register: { name, callback in callbacks[name] = callback; return 0 },
-                                tracksWindowTitles: false)
+        let client = makeClient(fake, register: { name, callback in callbacks[name] = callback; return 0 })
         client.start(observeSystem: false)
         await waitUntil { client.status.mode == .live }
         XCTAssertEqual(fake.commands.filter { $0.contains("--remove") }.map { $0.last! }, ["yabai-menu-window_moved", "yabai-menu-window_resized", "yabai-menu-window_title_changed"])
         XCTAssertEqual(fake.commands.filter { $0.contains("--displays") }.count, 1)
         XCTAssertTrue(fake.commands.contains(["-m", "query", "--displays", YabaiClient.displayFields]))
         XCTAssertTrue(fake.commands.contains(["-m", "query", "--spaces", YabaiClient.spaceFields]))
-        let fieldsWithoutTitle = YabaiClient.windowFields.replacingOccurrences(of: ",title,", with: ",")
-        XCTAssertTrue(fake.commands.contains(["-m", "query", "--windows", fieldsWithoutTitle]))
+        XCTAssertTrue(fake.commands.contains(["-m", "query", "--windows", YabaiClient.windowFields]))
         let previous = client.status.lastUpdated
         client.refresh()
         await waitUntil { client.status.lastUpdated != previous }
@@ -541,7 +266,7 @@ final class ClientTests: XCTestCase {
 
     func testDaemonRestartReinstallsEventsWithoutAHeartbeat() async {
         let fake = FakeYabai()
-        let client = makeClient(fake, tracksWindowTitles: false)
+        let client = makeClient(fake)
         client.start(observeSystem: false)
         await waitUntil { client.status.mode == .live }
         client.daemonChanged(available: false)

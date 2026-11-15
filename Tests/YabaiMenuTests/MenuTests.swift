@@ -271,7 +271,7 @@ final class MenuTests: XCTestCase {
         XCTAssertEqual(bar.cells.filter { $0.window != nil }.map(\.opacity), [1, 0.2, 0.2])
         let menuEvent = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
         var chosen: Int?
-        controller.focusAction = { _, window, _ in chosen = window }
+        controller.focusAction = { _, window in chosen = window }
         for (index, cell) in bar.cells.enumerated() {
             let button = try XCTUnwrap(bar.subviews[index] as? NSButton)
             let menu = button.menu(for: menuEvent)
@@ -344,9 +344,22 @@ final class MenuTests: XCTestCase {
     }
 
     @MainActor
-    func testNativeStatusWindowMouseRoutesSpaceWindowAndMenu() throws {
+    func testNativeStatusWindowMouseEventsSelectCellsWithoutOpeningFullMenu() throws {
         guard ProcessInfo.processInfo.environment["YABAI_MENU_UI_TESTS"] == "1" else { throw XCTSkip("AppKit session required") }
         _ = NSApplication.shared
+        @MainActor final class MenuProbe: NSObject, NSMenuDelegate {
+            var opens = 0
+            var timers: [Timer] = []
+            var release: NSEvent?
+            @objc func releaseMouse() { if let release { NSApp.postEvent(release, atStart: true) } }
+            func menuWillOpen(_ menu: NSMenu) {
+                opens += 1
+                let timer = Timer(timeInterval: 0.01, target: menu, selector: #selector(NSMenu.cancelTrackingWithoutAnimation), userInfo: nil, repeats: false)
+                RunLoop.current.add(timer, forMode: .eventTracking)
+                RunLoop.current.add(timer, forMode: .default)
+                timers.append(timer)
+            }
+        }
         var settings = AppSettings()
         settings.placement = .menuBar; settings.spaceScope = .all
         settings.showCreateSpace = false; settings.density = .custom; settings.customWidth = 500
@@ -361,25 +374,33 @@ final class MenuTests: XCTestCase {
         XCTAssertNil(item.menu, "Space clicks must not be bound to automatic menu tracking")
         full.removeAllItems()
         full.addItem(withTitle: "Test menu", action: nil, keyEquivalent: "")
-        var menus: [NSMenu] = []
-        let present: (NSMenu, NSPoint) -> Void = { menu, _ in menus.append(menu) }
+        let probe = MenuProbe()
+        full.delegate = probe
+        defer { probe.timers.forEach { $0.invalidate() }; full.delegate = controller }
         var choices: [(Int?, Int?)] = []
-        controller.focusAction = { space, window, _ in choices.append((space, window)) }
+        controller.focusAction = { choices.append(($0, $1)) }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
         let nativeWindows = NSApp.windows.filter { $0.level == .statusBar && abs($0.frame.width - native.frame.width) < 1 }
-        XCTAssertTrue(nativeWindows.contains { $0 === native }, "Exercise the native slot and any AppKit replicas")
+        XCTAssertEqual(nativeWindows.count, NSScreen.screens.count, "Exercise every actual status-window replica")
         for native in nativeWindows {
-          for target in [BarTarget.space(12), .window(1, 11, pid: 0)] {
+          for target in [BarTarget.space(12), .window(1, 11)] {
             let index = try XCTUnwrap(bar.cells.firstIndex { $0.target == target })
             let button = bar.subviews[index]
             let point = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
             let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: native.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
             let up = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [], timestamp: down.timestamp + 0.01, windowNumber: native.windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: 0))
-            XCTAssertNil(controller.handleStatusMouse(down, presentMenu: present))
-            XCTAssertNil(controller.handleStatusMouse(up, presentMenu: present))
+            probe.release = up
+            let watchdog = Timer(timeInterval: 0.2, target: probe, selector: #selector(MenuProbe.releaseMouse), userInfo: nil, repeats: false)
+            RunLoop.current.add(watchdog, forMode: .eventTracking)
+            RunLoop.current.add(watchdog, forMode: .default)
+            // Dispatch the recorded coordinates without postEvent rebasing offscreen test replicas.
+            NSApp.sendEvent(down)
+            NSApp.sendEvent(up)
+            watchdog.invalidate()
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02))
           }
         }
-        XCTAssertEqual(menus.count, 0, "Native left-click must not enter automatic full-menu tracking")
+        XCTAssertEqual(probe.opens, 0, "Native left-click must not enter automatic full-menu tracking")
         XCTAssertEqual(choices.count, nativeWindows.count * 2)
         for index in stride(from: 0, to: choices.count - 1, by: 2) {
             XCTAssertEqual(choices[index].0, 2); XCTAssertNil(choices[index].1)
@@ -389,15 +410,14 @@ final class MenuTests: XCTestCase {
         let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: cancelPoint, modifierFlags: [], timestamp: 0, windowNumber: native.windowNumber, context: nil, eventNumber: 3, clickCount: 1, pressure: 1))
         let up = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseUp, location: NSPoint(x: -20, y: cancelPoint.y), modifierFlags: [], timestamp: 0.01, windowNumber: native.windowNumber, context: nil, eventNumber: 4, clickCount: 1, pressure: 0))
         let before = choices.count
-        XCTAssertNil(controller.handleStatusMouse(down, presentMenu: present))
-        XCTAssertNil(controller.handleStatusMouse(up, presentMenu: present))
+        NSApp.sendEvent(down); NSApp.sendEvent(up)
         XCTAssertEqual(choices.count, before, "Releasing outside the original cell cancels selection")
         let right = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: NSPoint(x: 0, y: 12), modifierFlags: [], timestamp: 1, windowNumber: native.windowNumber, context: nil, eventNumber: 5, clickCount: 1, pressure: 1))
-        XCTAssertNil(controller.handleStatusMouse(right, presentMenu: present))
-        XCTAssertTrue(menus.count == 1 && menus[0] === full, "The native slot must retain its right-click full-menu entry")
+        NSApp.sendEvent(right)
+        XCTAssertEqual(probe.opens, 1, "The native slot must retain its right-click full-menu entry")
         let controlClick = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 0, y: 12), modifierFlags: .control, timestamp: 2, windowNumber: native.windowNumber, context: nil, eventNumber: 6, clickCount: 1, pressure: 1))
-        XCTAssertNil(controller.handleStatusMouse(controlClick, presentMenu: present))
-        XCTAssertTrue(menus.count == 2 && menus[1] === full, "Control-click remains a context-menu gesture")
+        NSApp.sendEvent(controlClick)
+        XCTAssertEqual(probe.opens, 2, "Control-click remains a context-menu gesture")
         let commandClick = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 0, y: 12), modifierFlags: .command, timestamp: 3, windowNumber: native.windowNumber, context: nil, eventNumber: 7, clickCount: 1, pressure: 1))
         XCTAssertTrue(controller.handleStatusMouse(commandClick) === commandClick, "Let macOS handle Command reordering")
     }
@@ -491,30 +511,6 @@ final class MenuTests: XCTestCase {
         catch { XCTAssertTrue(error.localizedDescription.contains("Command failed")) }
     }
 
-    func testMissingDiagnosticsOnlyAllowScopedQueryFallback() async throws {
-        let executable = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: executable) }
-        let script = "#!/bin/sh\nprintf \"could not locate window with the specified id '10'.\\n\" >&2\nexit 1\n"
-        try Data(script.utf8).write(to: executable)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-        for id in ["10", "11"] {
-            do {
-                _ = try await Command.run(executable.path, ["-m", "query", "--windows", "id,pid", "--window", id])
-                XCTFail("Expected a failed query")
-            } catch MenuError.windowUnavailable { XCTAssertEqual(id, "10") }
-            catch { XCTAssertEqual(id, "11") }
-        }
-
-        try Data("#!/bin/sh\nprintf 'could not retrieve space details.\\n' >&2\nexit 1\n".utf8).write(to: executable)
-        for selector in [[], ["--space"]] {
-            do {
-                _ = try await Command.run(executable.path, ["-m", "query", "--spaces", "id,index"] + selector)
-                XCTFail("Expected a failed query")
-            } catch MenuError.activeSpaceUnavailable { XCTAssertEqual(selector, ["--space"]) }
-            catch { XCTAssertTrue(selector.isEmpty) }
-        }
-    }
-
     @MainActor
     func testLiveYabaiNotificationsAndCleanup() async throws {
         guard let path = ProcessInfo.processInfo.environment["YABAI_MENU_LIVE_PATH"] else {
@@ -590,212 +586,6 @@ final class MenuTests: XCTestCase {
     }
 
     @MainActor
-    func testFullMenuLoadsFreshTitlesOnFirstOpenWithoutReplacingRows() throws {
-        _ = NSApplication.shared
-        let controller = MenuBarController()
-        defer { if let item = controller.statusItem { NSStatusBar.system.removeStatusItem(item) } }
-        var row = window(1, space: 2, focus: true, sticky: true, minimized: true)
-        row["title"] = nil
-        controller.update(try snapshot([row, window(2)]), status: ConnectionStatus(mode: .live))
-        let menu = controller.fullMenu
-        controller.menuNeedsUpdate(menu)
-        let items = menu.items, ids = items.map(ObjectIdentifier.init)
-        let rows = items.filter { $0.tag == 1 && $0.indentationLevel == 1 }
-        XCTAssertEqual(rows.count, 2, "Focused sticky windows appear under Current Space and their owning Space")
-        XCTAssertTrue(rows.allSatisfy { $0.title == "App 1 · minimized" })
-        var requests = 0
-        controller.makeMenuTitleRequest = {
-            requests += 1
-            return { [1: .init(id: 1, pid: 0, title: "Fresh title"),
-                      2: .init(id: 2, pid: 123, title: "Reused ID")] }
-        }
-        controller.menuWillOpen(menu)
-        defer { controller.menuDidClose(menu) }
-        let deadline = Date(timeIntervalSinceNow: 1)
-        while rows.contains(where: { !$0.title.contains("Fresh title") }), Date() < deadline {
-            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
-        }
-        XCTAssertEqual(requests, 1)
-        XCTAssertEqual(menu.items.map(ObjectIdentifier.init), ids)
-        XCTAssertEqual(items.first { $0.tag == 2 && $0.indentationLevel == 1 }?.title, "App 2 — Window 2")
-        XCTAssertTrue(rows.allSatisfy { $0.title == "App 1 — Fresh title · minimized" && $0.toolTip?.contains("Fresh title") == true })
-    }
-
-    @MainActor
-    func testOldFullMenuRowDoesNotSelectAReusedWindowID() throws {
-        _ = NSApplication.shared
-        let controller = MenuBarController()
-        defer { if let item = controller.statusItem { NSStatusBar.system.removeStatusItem(item) } }
-        controller.update(try snapshot([window(1)]), status: ConnectionStatus(mode: .live))
-        let menu = controller.fullMenu
-        controller.menuNeedsUpdate(menu)
-        let item = try XCTUnwrap(menu.items.first { $0.tag == 1 && $0.indentationLevel == 1 })
-        controller.menuWillOpen(menu)
-        defer { controller.menuDidClose(menu) }
-        var replacement = window(1)
-        replacement["pid"] = 456
-        controller.update(try snapshot([replacement]), status: ConnectionStatus(mode: .live))
-        controller.focusAction = { _, _, _ in XCTFail("The old menu row must not select a different process") }
-        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(item.action), to: item.target, from: item))
-    }
-
-    @MainActor
-    func testStatusClickCancelsIfWindowIDChangesOwnerBeforeRelease() throws {
-        guard ProcessInfo.processInfo.environment["YABAI_MENU_UI_TESTS"] == "1" else { throw XCTSkip("AppKit session required") }
-        _ = NSApplication.shared
-        var settings = AppSettings()
-        settings.spaceScope = .all
-        let controller = MenuBarController(settings: settings)
-        controller.setupItem()
-        let item = try XCTUnwrap(controller.statusItem)
-        defer { NSStatusBar.system.removeStatusItem(item) }
-        func update(owner: Int) throws {
-            var row = window(1, focus: true)
-            row["pid"] = owner
-            controller.update(try snapshot([row]), status: ConnectionStatus(mode: .live))
-        }
-        try update(owner: 123)
-        var selected: [Int32] = []
-        controller.focusAction = { _, _, pid in if let pid { selected.append(pid) } }
-        let bar = try XCTUnwrap(controller.widgetBar)
-        let slot = try XCTUnwrap(item.button?.window)
-        let index = try XCTUnwrap(bar.cells.firstIndex { $0.target == .window(1, 11, pid: 123) })
-        let cell = bar.subviews[index]
-        let point = cell.convert(NSPoint(x: cell.bounds.midX, y: cell.bounds.midY), to: nil)
-        let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [],
-                                                   timestamp: 0, windowNumber: slot.windowNumber, context: nil,
-                                                   eventNumber: 1, clickCount: 1, pressure: 1))
-        let up = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [],
-                                                 timestamp: 0.01, windowNumber: slot.windowNumber, context: nil,
-                                                 eventNumber: 2, clickCount: 1, pressure: 0))
-        XCTAssertNil(controller.handleStatusMouse(down))
-        try update(owner: 456)
-        XCTAssertNil(controller.handleStatusMouse(up))
-        XCTAssertTrue(selected.isEmpty)
-        XCTAssertNil(controller.handleStatusMouse(down))
-        XCTAssertNil(controller.handleStatusMouse(up))
-        XCTAssertEqual(selected, [456])
-    }
-
-    @MainActor
-    func testClosedFullMenuCannotReceiveLateTitles() throws {
-        _ = NSApplication.shared
-        let controller = MenuBarController()
-        defer { if let item = controller.statusItem { NSStatusBar.system.removeStatusItem(item) } }
-        controller.update(try snapshot([window(1)]), status: ConnectionStatus(mode: .live))
-        let menu = controller.fullMenu
-        controller.menuNeedsUpdate(menu)
-        let item = try XCTUnwrap(menu.items.first { $0.tag == 1 && $0.indentationLevel == 1 })
-        let started = expectation(description: "Title request started")
-        let released = expectation(description: "Title response returned")
-        let gate = DispatchSemaphore(value: 0)
-        @Sendable func waitForClose() { _ = gate.wait(timeout: .now() + 1) }
-        controller.makeMenuTitleRequest = {
-            {
-                started.fulfill()
-                waitForClose()
-                released.fulfill()
-                return [1: .init(id: 1, pid: 0, title: "Too late")]
-            }
-        }
-        controller.menuWillOpen(menu)
-        wait(for: [started], timeout: 1)
-        controller.menuDidClose(menu)
-        gate.signal()
-        wait(for: [released], timeout: 1)
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
-        XCTAssertEqual(item.title, "App 1 — Window 1")
-    }
-
-    @MainActor
-    func testFullMenuAppliesTitlesDuringNativeTracking() throws {
-        guard ProcessInfo.processInfo.environment["YABAI_MENU_UI_TESTS"] == "1" else { throw XCTSkip("AppKit session required") }
-        _ = NSApplication.shared
-        let controller = MenuBarController()
-        controller.setupItem()
-        defer { if let item = controller.statusItem { NSStatusBar.system.removeStatusItem(item) } }
-        var row = window(1)
-        row["title"] = nil
-        controller.update(try snapshot([row]), status: ConnectionStatus(mode: .live))
-        controller.makeMenuTitleRequest = {
-            { try? await Task.sleep(nanoseconds: 100_000_000); return [1: .init(id: 1, pid: 0, title: "Fresh during tracking")] }
-        }
-        let menu = controller.fullMenu
-        var sawFreshTitle = false
-        let deadline = Date(timeIntervalSinceNow: 2)
-        let watchdog = Timer(timeInterval: 0.02, repeats: true) { [weak controller] timer in
-            MainActor.assumeIsolated {
-                sawFreshTitle = controller?.fullMenu.items.contains { $0.title == "App 1 — Fresh during tracking" } == true
-                if sawFreshTitle || Date() >= deadline {
-                    timer.invalidate()
-                    controller?.fullMenu.cancelTrackingWithoutAnimation()
-                }
-            }
-        }
-        RunLoop.current.add(watchdog, forMode: .eventTracking)
-        RunLoop.current.add(watchdog, forMode: .default)
-        defer { watchdog.invalidate() }
-        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
-        XCTAssertTrue(sawFreshTitle)
-    }
-
-    @MainActor
-    func testHoverLoadsOnlyAttachedTargetAndDoesNotReuseLateTooltip() async throws {
-        guard ProcessInfo.processInfo.environment["YABAI_MENU_UI_TESTS"] == "1" else { throw XCTSkip("AppKit session required") }
-        _ = NSApplication.shared
-        let panel = FloatingBarPanel(contentRect: NSRect(x: 0, y: 0, width: 160, height: 24),
-                                     styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: false)
-        let bar = WidgetBarView(), settings = AppSettings()
-        panel.contentView?.addSubview(bar)
-        panel.orderFrontRegardless()
-        defer { panel.orderOut(nil) }
-        var replies: [Int: CheckedContinuation<String?, Never>] = [:]
-        defer { replies.values.forEach { $0.resume(returning: nil) } }
-        var requests = [Int]()
-        bar.loadTitle = { window in
-            requests.append(window.id)
-            return await withCheckedContinuation { replies[window.id] = $0 }
-        }
-        func drawWindow(_ id: Int) throws {
-            var row = window(id)
-            row["title"] = nil
-            bar.configure(try snapshot([row]), settings: settings) { _ in nil }
-        }
-        try drawWindow(1)
-        let button = try XCTUnwrap(bar.subviews.compactMap { $0 as? WidgetButton }.first { $0.cellInfo.window?.id == 1 })
-        XCTAssertFalse(button.trackingAreas.isEmpty)
-        XCTAssertTrue(requests.isEmpty)
-        button.beginTitleHover()
-        try await Task.sleep(nanoseconds: 30_000_000)
-        button.endTitleHover()
-        XCTAssertTrue(requests.isEmpty, "Passing over an icon must not start a query")
-        button.beginTitleHover()
-        panel.ignoresMouseEvents = true
-        try await Task.sleep(nanoseconds: 200_000_000)
-        XCTAssertTrue(requests.isEmpty, "An overlay that no longer accepts mouse events must not start a query")
-        button.endTitleHover()
-        panel.ignoresMouseEvents = false
-        let deadline = Date(timeIntervalSinceNow: 2)
-        button.beginTitleHover()
-        while replies[1] == nil, Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
-        XCTAssertEqual(requests, [1])
-        try drawWindow(2)
-        XCTAssertTrue(bar.subviews.contains { $0 === button })
-        try XCTUnwrap(replies.removeValue(forKey: 1)).resume(returning: "Previous button")
-        button.beginTitleHover()
-        while replies[2] == nil, Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
-        XCTAssertEqual(requests, [1, 2])
-        XCTAssertEqual(button.toolTip, "App 2 · bsp · Right-click for menu and settings")
-        try XCTUnwrap(replies.removeValue(forKey: 2)).resume(returning: "Current button")
-        while button.toolTip?.contains("Current button") != true, Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
-        XCTAssertEqual(button.toolTip, "App 2 — Current button · bsp · Right-click for menu and settings")
-        XCTAssertEqual(bar.cells.first { $0.window?.id == 2 }?.tooltip, "App 2 · bsp")
-        XCTAssertFalse(button.accessibilityLabel()?.contains("Current button") ?? true)
-        button.endTitleHover()
-        XCTAssertEqual(button.toolTip, "App 2 · bsp · Right-click for menu and settings")
-    }
-
-    @MainActor
     func testTrackingMenuDoesNotMoveTargetsAndResolvesStableIDs() throws {
         guard ProcessInfo.processInfo.environment["YABAI_MENU_UI_TESTS"] == "1" else { throw XCTSkip("Interactive macOS session required") }
         _ = NSApplication.shared
@@ -821,7 +611,7 @@ final class MenuTests: XCTestCase {
         controller.update(next, status: ConnectionStatus(mode: .live))
         XCTAssertEqual(menu.items.map(ObjectIdentifier.init), rows)
         var chosen: Int?
-        controller.focusAction = { space, _, _ in chosen = space }
+        controller.focusAction = { space, _ in chosen = space }
         XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(target.action), to: target.target, from: target))
         XCTAssertEqual(chosen, 4, "Stable Space ID must resolve to its new index")
         controller.menuDidClose(menu)
@@ -850,7 +640,7 @@ final class MenuTests: XCTestCase {
         let menu = controller.fullMenu
         controller.menuNeedsUpdate(menu)
         var chosenSpace: Int?, chosenWindow: Int?
-        controller.focusAction = { space, window, _ in chosenSpace = space; chosenWindow = window }
+        controller.focusAction = { chosenSpace = $0; chosenWindow = $1 }
         let spaceItem = try XCTUnwrap(menu.items.first { $0.tag == 2 && $0.indentationLevel == 0 })
         XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(spaceItem.action), to: spaceItem.target, from: spaceItem))
         XCTAssertEqual(chosenSpace, 2)
@@ -1014,12 +804,12 @@ final class MenuTests: XCTestCase {
             let button = try XCTUnwrap(bar.subviews[index] as? NSButton)
             XCTAssertTrue(bar.hitTest(NSPoint(x: button.frame.midX, y: button.frame.midY)) === button)
             button.performClick(nil)
-            XCTAssertEqual(selected, .window(500, nil, pid: 0))
+            XCTAssertEqual(selected, .window(500, nil))
             button.isHighlighted = true // still being tracked when the refresh lands
             bar.configure(try snapshot([]), settings: settings) { _ in image }
             selected = nil
             button.performClick(nil)
-            XCTAssertEqual(selected, .window(500, nil, pid: 0), "A button retained during tracking must keep its original stable target")
+            XCTAssertEqual(selected, .window(500, nil), "A button retained during tracking must keep its original stable target")
             bar.configure(state, settings: settings, enabled: false) { _ in image }
             XCTAssertTrue(bar.subviews.compactMap { $0 as? NSButton }.allSatisfy { $0.isEnabled == (bar.cells[$0.tag].target == .menu) })
         }

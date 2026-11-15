@@ -99,8 +99,7 @@ final class MenuBarHosts {
     func update(_ snapshot: Snapshot, settings: AppSettings, status: ConnectionStatus,
                 reserveWidth: (CGFloat) -> Void = { _ in },
                 commandDown: Bool = NSEvent.modifierFlags.contains(.command),
-                icon: (Window) -> NSImage?, menu: @escaping (BarTarget) -> NSMenu?, select: @escaping (BarTarget) -> Void,
-                loadTitle: WidgetBarView.LoadTitle? = nil) -> CGFloat {
+                icon: (Window) -> NSImage?, menu: @escaping (BarTarget) -> NSMenu?, select: @escaping (BarTarget) -> Void) -> CGFloat {
         let connected = screens(snapshot), ids = Set(connected.map(\.id))
         for id in Array(hosts.keys) where !ids.contains(id) { hosts.removeValue(forKey: id)?.panel.close() }
         let initialSlots = anchors()
@@ -115,7 +114,6 @@ final class MenuBarHosts {
             let height = localSlots.count == 1 ? Self.contentFrame(in: localSlots[0]).height : NSStatusBar.system.thickness
             host.bar.onSelect = select
             host.bar.contextMenu = menu
-            host.bar.loadTitle = loadTitle
             if host.bar.menu == nil {
                 let context = menu(.menu)
                 host.bar.menu = context

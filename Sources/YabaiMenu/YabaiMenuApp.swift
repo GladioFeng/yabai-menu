@@ -12,26 +12,11 @@
 // 预期输出：
 // - 原生菜单栏中的 Space 编号、窗口图标和状态。
 import AppKit
-import ApplicationServices
-import ServiceManagement
 import YabaiMenuKit
 
 @main
 struct YabaiMenuApp {
     @MainActor static func main() {
-        if CommandLine.arguments.dropFirst().elementsEqual(["--upgrade-status"]) {
-            let login: String
-            switch SMAppService.mainApp.status {
-            case .notRegistered: login = "not registered"
-            case .enabled: login = "enabled"
-            case .requiresApproval: login = "requires approval"
-            case .notFound: login = "not found"
-            @unknown default: login = "unknown"
-            }
-            print("Accessibility: \(AXIsProcessTrusted() ? "granted" : "not granted")")
-            print("Launch at login: \(login)")
-            return
-        }
         let app = NSApplication.shared
         let delegate = MenuBarController()
         app.setActivationPolicy(.accessory)

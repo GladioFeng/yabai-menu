@@ -25,26 +25,19 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
     private var nativeClick: (window: Int, target: BarTarget, bounds: NSRect)?
     private var menuAnchorObservers: [NSObjectProtocol] = []
     private var modifierMonitors: [Any] = []
-    private var menuAnchorUpdateTask: Task<Void, Never>?
-    private var menuAnchorMouseDown = YabaiWindowEvents.isLeftButtonDown
+    private var menuAnchorUpdateQueued = false
     private var screenObserver: NSObjectProtocol?
     private var menuTracking = false
     private var menuListChanged = false
-    private var menuWindowRows: [(item: NSMenuItem, window: Window)] = []
-    private var menuTitleTask: Task<Void, Never>?
-    private var menuTitleRequestID = 0
     private var statusMenuItem: NSMenuItem?
     private var updatedMenuItem: NSMenuItem?
-    var focusAction: ((Int?, Int?, Int32?) -> Void)?
-    var makeMenuTitleRequest: (() -> (@Sendable () async -> [Int: YabaiClient.WindowTitle])?)?
+    var focusAction: ((Int?, Int?) -> Void)?
 
     public override init() { super.init() }
-    init(settings: AppSettings, defaults: UserDefaults = .standard, menuBarHosts: MenuBarHosts? = nil,
-         menuAnchorMouseDown: @escaping () -> Bool = YabaiWindowEvents.isLeftButtonDown) {
+    init(settings: AppSettings, defaults: UserDefaults = .standard, menuBarHosts: MenuBarHosts? = nil) {
         self.settings = settings
         settingsDefaults = defaults
         if let menuBarHosts { self.menuBarHosts = menuBarHosts }
-        self.menuAnchorMouseDown = menuAnchorMouseDown
         super.init()
     }
 
@@ -58,14 +51,12 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
     }
 
     private func connectClient() {
-        cancelMenuTitles()
         clientGeneration += 1
         let generation = clientGeneration
         let previous = clientTransition
         clientTransition = Task {
             await previous?.value
             guard !quitting, generation == clientGeneration else { return }
-            defer { if generation == clientGeneration { clientTransition = nil } }
             let old = client
             client = nil
             await old?.stop()
@@ -75,10 +66,9 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
                     detail: "yabai was not found. Install it, or choose its executable in Settings."))
                 return
             }
-            let next = YabaiClient(path: path, delayAutomaticFocus: settings.delayAutomaticFocus,
-                                   tracksWindowTitles: settings.needsLiveWindowTitles)
+            let next = YabaiClient(path: path, delayAutomaticFocus: settings.delayAutomaticFocus)
             client = next
-            focusAction = { [weak next] space, window, pid in next?.focus(space: space, window: window, expectedPID: pid) }
+            focusAction = { [weak next] space, window in next?.focus(space: space, window: window) }
             next.onUpdate = { [weak self, weak next] snapshot, status in
                 guard let self, self.client === next else { return }
                 self.update(snapshot, status: status)
@@ -88,8 +78,6 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
     }
 
     deinit {
-        menuAnchorUpdateTask?.cancel()
-        menuTitleTask?.cancel()
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         menuAnchorObservers.forEach(NotificationCenter.default.removeObserver)
         modifierMonitors.forEach(NSEvent.removeMonitor)
@@ -161,25 +149,17 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
     }
 
     private func scheduleMenuAnchorUpdate() {
-        guard settings.placement == .menuBar, settings.spaceScope == .focusedDisplay,
-              !quitting, menuAnchorUpdateTask == nil else { return }
-        menuAnchorUpdateTask = Task { [weak self] in
-            // Status-window notifications can arrive on the first frame of a Finder drag.
-            while self?.menuAnchorMouseDown() == true {
-                do { try await Task.sleep(nanoseconds: YabaiClient.quietPeriod) } catch { return }
-            }
+        guard settings.placement == .menuBar, settings.spaceScope == .focusedDisplay, !quitting, !menuAnchorUpdateQueued else { return }
+        menuAnchorUpdateQueued = true
+        DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            menuAnchorUpdateTask = nil
-            guard !quitting, settings.placement == .menuBar, settings.spaceScope == .focusedDisplay else { return }
-            update(snapshot, status: status, force: true)
+            self.menuAnchorUpdateQueued = false
+            self.update(self.snapshot, status: self.status, force: true)
         }
     }
 
-    func handleStatusMouse(_ event: NSEvent, presentMenu: (NSMenu, NSPoint) -> Void = {
-        $0.popUp(positioning: nil, at: $1, in: nil)
-    }) -> NSEvent? {
-        guard settings.placement == .menuBar, snapshot != nil, statusItem?.menu == nil,
-              let window = event.window, window.level == .statusBar else { return event }
+    func handleStatusMouse(_ event: NSEvent) -> NSEvent? {
+        guard settings.placement == .menuBar, snapshot != nil, let window = event.window, window.level == .statusBar else { return event }
         guard !event.modifierFlags.contains(.command) else { nativeClick = nil; return event }
         let point = window.convertPoint(toScreen: event.locationInWindow)
         let hit: (target: BarTarget, bounds: NSRect)?
@@ -196,7 +176,8 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
         } else { hit = nil }
         if event.type == .rightMouseDown || (event.type == .leftMouseDown && event.modifierFlags.contains(.control)) {
             nativeClick = nil
-            presentMenu(hit.map { barContextMenu($0.target) } ?? fullMenu, point)
+            if let hit { barContextMenu(hit.target).popUp(positioning: nil, at: point, in: nil) }
+            else { fullMenu.popUp(positioning: nil, at: point, in: nil) }
             return nil
         }
         switch event.type {
@@ -205,8 +186,7 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
         case .leftMouseUp:
             let click = nativeClick
             nativeClick = nil
-            if let click, click.window == window.windowNumber, click.bounds.contains(point),
-               hit?.target == click.target { selectBarTarget(click.target) }
+            if let click, click.window == window.windowNumber, click.bounds.contains(point) { selectBarTarget(click.target) }
         default: return event
         }
         return nil
@@ -217,18 +197,13 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
         let changed = snapshotChanged || self.status.needsAttention != status.needsAttention || self.status.mode != status.mode
         self.snapshot = snapshot
         self.status = status
-        if status.mode != .live && status.mode != .limited, menuTitleTask != nil { cancelMenuTitles() }
         settingsWindow?.updateStatus(status, path: client?.path)
         if settings.effectivePlacement == .menuBar || snapshot == nil || floatingBars.hosts.isEmpty { ensureStatusItem() }
         if settings.effectivePlacement == .menuBar, statusItem?.isVisible == false { statusItem?.isVisible = true }
+        let automaticMenu: NSMenu? = settings.placement == .menuBar && snapshot != nil ? nil : fullMenu
+        if statusItem?.menu !== automaticMenu { statusItem?.menu = automaticMenu }
         if changed || force {
             if let snapshot {
-                let loadTitle: WidgetBarView.LoadTitle = { [weak self] window in
-                    guard let self, !quitting, clientTransition == nil, let source = client else { return nil }
-                    let titles = await source.loadWindowTitles(for: window)
-                    guard client === source, !quitting else { return nil }
-                    return titles[window.id]
-                }
                 if settings.effectivePlacement != .menuBar {
                     menuBarHosts.close()
                     widgetBar?.removeFromSuperview(); widgetBar = nil
@@ -236,10 +211,11 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
                     if statusItem?.button?.title != "Yabai" { statusItem?.button?.title = "Yabai" }
                     floatingBars.update(snapshot, settings: settings, status: status, icon: icon,
                                         menu: { [weak self] in self?.barContextMenu($0) },
-                                        select: { [weak self] in self?.selectBarTarget($0) }, loadTitle: loadTitle)
+                                        select: { [weak self] in self?.selectBarTarget($0) })
                 } else if settings.spaceScope == .focusedDisplay, let button = statusItem?.button {
                     floatingBars.close()
                     widgetBar?.removeFromSuperview(); widgetBar = nil
+                    if !button.title.isEmpty { button.title = "" }
                     menuBarHosts.update(snapshot, settings: settings, status: status,
                                                    reserveWidth: { [weak self] width in
                                                        guard let self, self.statusItem?.length != width else { return }
@@ -247,10 +223,9 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
                                                        self.scheduleMenuAnchorUpdate()
                                                    }, icon: icon,
                                                    menu: { [weak self] in self?.barContextMenu($0) },
-                                                   select: { [weak self] in self?.selectBarTarget($0) }, loadTitle: loadTitle)
-                    let title = menuBarHosts.hosts.values.contains { $0.panel.isVisible } ? "" : "Yabai"
-                    if button.title != title { button.title = title }
-                    if menuBarHosts.hosts.isEmpty, statusItem?.length != NSStatusItem.variableLength {
+                                                   select: { [weak self] in self?.selectBarTarget($0) })
+                    if menuBarHosts.hosts.isEmpty {
+                        button.title = "Yabai"
                         statusItem?.length = NSStatusItem.variableLength
                     }
                 } else if let button = statusItem?.button {
@@ -259,7 +234,6 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
                     let bar = widgetBar ?? WidgetBarView()
                     bar.onSelect = { [weak self] in self?.selectBarTarget($0) }
                     bar.contextMenu = { [weak self] in self?.barContextMenu($0) }
-                    bar.loadTitle = loadTitle
                     bar.menu = barContextMenu(.menu)
                     bar.configure(snapshot, settings: settings,
                                   enabled: status.mode == .live || status.mode == .limited, height: button.bounds.height, icon: icon)
@@ -283,11 +257,8 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
             }
         }
         if floatingBars.hosts.isEmpty { ensureStatusItem() } else { removeStatusItem() }
-        let hasBar = widgetBar != nil || menuBarHosts.hosts.values.contains { $0.panel.isVisible }
-        let automaticMenu: NSMenu? = settings.placement == .menuBar && snapshot != nil && hasBar ? nil : fullMenu
-        if statusItem?.menu !== automaticMenu { statusItem?.menu = automaticMenu }
         let current = snapshot?.focusedSpace.map { "Space \($0.index)" } ?? "No focused Space"
-        let window = snapshot?.focusedWindow.map { $0.title.isEmpty ? "\($0.app), \($0.state)" : "\($0.app), \($0.title), \($0.state)" } ?? "No focused window"
+        let window = snapshot?.focusedWindow.map { "\($0.app), \($0.title), \($0.state)" } ?? "No focused window"
         let label = "\(current). \(window). \(status.title). Open menu to switch."
         if statusItem?.button?.accessibilityLabel() != label { statusItem?.button?.setAccessibilityLabel(label) }
         let tooltip = status.message ?? "\(current) · \(status.title). Click to switch Spaces or windows."
@@ -324,55 +295,11 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
     }
 
     public func menuNeedsUpdate(_ menu: NSMenu) { if !menuTracking { rebuildMenu(menu) } }
-    public func menuWillOpen(_ menu: NSMenu) {
-        menuListChanged = false
-        menuTracking = true
-        client?.refresh(automatic: true)
-        cancelMenuTitles()
-        guard menu === fullMenu, !quitting, clientTransition == nil, !menuWindowRows.isEmpty,
-              status.mode == .live || status.mode == .limited,
-              let request = makeMenuTitleRequest?() ?? client?.windowTitleRequest() else { return }
-        let requestID = menuTitleRequestID, generation = clientGeneration
-        menuTitleTask = Task.detached { [weak self] in
-            let titles = await request()
-            guard !Task.isCancelled else { return }
-            // AppKit may run a nested tracking loop without servicing the main dispatch queue.
-            let loop = CFRunLoopGetMain()
-            CFRunLoopPerformBlock(loop, [RunLoop.Mode.default.rawValue, RunLoop.Mode.eventTracking.rawValue] as CFArray) { [weak self] in
-                MainActor.assumeIsolated {
-                    self?.applyMenuTitles(titles, requestID: requestID, generation: generation)
-                }
-            }
-            CFRunLoopWakeUp(loop)
-        }
-    }
-
-    public func menuDidClose(_ menu: NSMenu) {
-        menuTracking = false
-        cancelMenuTitles()
-    }
-
-    private func cancelMenuTitles() {
-        menuTitleRequestID &+= 1
-        menuTitleTask?.cancel()
-        menuTitleTask = nil
-    }
-
-    private func applyMenuTitles(_ titles: [Int: YabaiClient.WindowTitle], requestID: Int, generation: Int) {
-        guard menuTracking, menuTitleRequestID == requestID, clientGeneration == generation else { return }
-        menuTitleTask = nil
-        guard !titles.isEmpty, let snapshot else { return }
-        let owners = Dictionary(grouping: snapshot.windows, by: \.id)
-        for (item, window) in menuWindowRows where item.menu === fullMenu {
-            guard let title = titles[window.id], title.id == window.id, title.pid == window.pid,
-                  let matches = owners[window.id], matches.count == 1, matches[0].pid == title.pid else { continue }
-            setMenuWindowTitle(item, window: window, title: title.title ?? "")
-        }
-    }
+    public func menuWillOpen(_ menu: NSMenu) { menuListChanged = false; menuTracking = true; client?.refresh() }
+    public func menuDidClose(_ menu: NSMenu) { menuTracking = false }
 
     private func rebuildMenu(_ menu: NSMenu) {
         menu.removeAllItems()
-        menuWindowRows.removeAll()
         statusMenuItem = menu.addItem(withTitle: status.isSwitching ? "Switching…" : status.title, action: nil, keyEquivalent: "")
         updatedMenuItem = menu.addItem(withTitle: status.updatedDescription(), action: nil, keyEquivalent: "")
         if let message = status.message {
@@ -432,8 +359,8 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
         switch target {
         case .space(let id):
             let sender = NSMenuItem(); sender.representedObject = id; selectSpace(sender)
-        case .window(let id, let space, let pid):
-            selectWindow(id: id, pid: pid, preferredSpaceID: space)
+        case .window(let id, let space):
+            let sender = NSMenuItem(); sender.tag = id; sender.representedObject = space; selectWindow(sender)
         case .create(let id): client?.perform(.create(anchorID: id))
         case .menu:
             fullMenu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
@@ -443,7 +370,7 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
     func barContextMenu(_ target: BarTarget) -> NSMenu {
         let menu: NSMenu
         switch target {
-        case .space(let id), .window(_, let id?, _): menu = spaceMenu(id) ?? NSMenu()
+        case .space(let id), .window(_, let id?): menu = spaceMenu(id) ?? NSMenu()
         default: menu = NSMenu()
         }
         if !menu.items.isEmpty { menu.addItem(.separator()) }
@@ -518,24 +445,17 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
     }
 
     private func addWindow(_ window: Window, spaceID: Int?, to menu: NSMenu) {
-        let item = menu.addItem(withTitle: window.app, action: #selector(selectWindow(_:)), keyEquivalent: "")
+        let suffix = window.minimized ? " · minimized" : (window.hidden ? " · hidden" : "")
+        let text = window.title.isEmpty ? window.app : "\(window.app) — \(window.title)"
+        let short = text.count > 65 ? String(text.prefix(64)) + "…" : text
+        let item = menu.addItem(withTitle: short + suffix, action: #selector(selectWindow(_:)), keyEquivalent: "")
         item.indentationLevel = 1
         item.target = self
         item.tag = window.id
-        item.representedObject = BarTarget.window(window.id, spaceID, pid: window.pid)
+        item.representedObject = spaceID
+        item.toolTip = text + " · " + window.state
         item.image = icon(for: window)
         item.state = window.focused ? .on : .off
-        setMenuWindowTitle(item, window: window, title: window.title)
-        menuWindowRows.append((item, window))
-    }
-
-    private func setMenuWindowTitle(_ item: NSMenuItem, window: Window, title: String) {
-        let suffix = window.minimized ? " · minimized" : (window.hidden ? " · hidden" : "")
-        let text = title.isEmpty ? window.app : "\(window.app) — \(title)"
-        let short = text.count > 65 ? String(text.prefix(64)) + "…" : text
-        if item.title != short + suffix { item.title = short + suffix }
-        let tooltip = text + " · " + window.state
-        if item.toolTip != tooltip { item.toolTip = tooltip }
     }
 
     private func item(_ menu: NSMenu, _ title: String, _ action: Selector, key: String = "") {
@@ -546,22 +466,17 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
         guard let id = sender.representedObject as? Int, let space = snapshot?.spaces.first(where: { $0.id == id }) else {
             selectionError("That Space is no longer available. Reopen the menu and choose again."); return
         }
-        focusAction?(space.index, nil, nil)
+        focusAction?(space.index, nil)
     }
     @objc private func selectWindow(_ sender: NSMenuItem) {
-        guard let target = sender.representedObject as? BarTarget,
-              case .window(let id, let space, let pid) = target else { return }
-        selectWindow(id: id, pid: pid, preferredSpaceID: space)
-    }
-
-    private func selectWindow(id: Int, pid: Int32, preferredSpaceID: Int?) {
-        guard let window = snapshot?.windows.first(where: { $0.id == id && $0.pid == pid }) else {
+        guard let window = snapshot?.windows.first(where: { $0.id == sender.tag }) else {
             selectionError("That window is no longer available. Reopen the menu and choose again."); return
         }
+        let preferredID = sender.representedObject as? Int
         let space = window.sticky
-            ? snapshot?.spaces.first(where: { $0.id == preferredSpaceID })
+            ? snapshot?.spaces.first(where: { $0.id == preferredID })
             : snapshot?.spaces.first(where: { $0.index == window.space })
-        focusAction?(space?.index, window.id, window.pid)
+        focusAction?(space?.index, window.id)
     }
     private func selectionError(_ message: String) {
         if let client { client.reportActionError(message) }
@@ -595,10 +510,7 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
                 settings.save(to: self.settingsDefaults)
                 self.update(self.snapshot, status: self.status, force: true)
                 if pathChanged { self.connectClient() }
-                else {
-                    self.client?.delayAutomaticFocus = settings.delayAutomaticFocus
-                    self.client?.setWindowTitleTracking(settings.needsLiveWindowTitles)
-                }
+                else { self.client?.delayAutomaticFocus = settings.delayAutomaticFocus }
             }
             controller.onReconnect = { [weak self] in self?.checkConnection() }
             controller.onCopyDiagnostics = { [weak self] in self?.copyDiagnostics() }
@@ -646,9 +558,6 @@ public final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDel
 
     public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         quitting = true
-        menuAnchorUpdateTask?.cancel()
-        menuAnchorUpdateTask = nil
-        cancelMenuTitles()
         floatingBars.close()
         menuBarHosts.close()
         clientGeneration += 1

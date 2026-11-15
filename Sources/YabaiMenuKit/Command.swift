@@ -45,21 +45,6 @@ enum Command {
                         return
                     }
                     let detail = String(decoding: diagnostic.prefix(300), as: UTF8.self)
-                    if complete, process.terminationStatus == 1, arguments.count == 6,
-                       arguments.starts(with: ["-m", "query", "--windows"]), arguments[4] == "--window" {
-                        let message = detail.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if message == "could not locate window with the specified id '\(arguments[5])'." ||
-                           message == "could not retrieve window details." {
-                            continuation.resume(throwing: MenuError.windowUnavailable)
-                            return
-                        }
-                    }
-                    if complete, process.terminationStatus == 1, arguments.count == 5,
-                       arguments.starts(with: ["-m", "query", "--spaces"]), arguments.last == "--space",
-                       detail.trimmingCharacters(in: .whitespacesAndNewlines) == "could not retrieve space details." {
-                        continuation.resume(throwing: MenuError.activeSpaceUnavailable)
-                        return
-                    }
                     let reason = DispatchTime.now() >= deadline ? "Command timed out." : "Command failed (\(process.terminationStatus)) or returned too much output."
                     continuation.resume(throwing: MenuError.message("\(reason) \(detail)"))
                     return
