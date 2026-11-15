@@ -14,7 +14,7 @@
 set -eu
 cd "$(dirname "$0")"
 version=1.0.0
-build=44
+build=57
 if [ -z "${DEVELOPER_DIR:-}" ]; then
     DEVELOPER_DIR=$(/usr/bin/xcode-select -p)
     export DEVELOPER_DIR
@@ -79,8 +79,24 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
-codesign --force --sign - --options runtime "$app"
-codesign --verify --deep --strict "$app"
+set -- --force --sign "${YABAI_MENU_SIGNING_IDENTITY:--}" --options runtime
+if [ -n "${YABAI_MENU_SIGNING_KEYCHAIN:-}" ]; then
+    set -- "$@" --keychain "$YABAI_MENU_SIGNING_KEYCHAIN"
+fi
+if [ -n "${YABAI_MENU_SIGNING_REQUIREMENT:-}" ]; then
+    set -- "$@" --requirements "=designated => $YABAI_MENU_SIGNING_REQUIREMENT"
+fi
+/usr/bin/codesign "$@" "$app"
+/usr/bin/codesign --verify --deep --strict --all-architectures "$app"
+if [ -n "${YABAI_MENU_SIGNING_REFERENCE_APP:-}" ]; then
+    reference=$(/usr/bin/codesign --display -r- "$YABAI_MENU_SIGNING_REFERENCE_APP" 2>&1)
+    requirement=$(printf '%s\n' "$reference" | /usr/bin/sed -n 's/^designated => //p')
+    if [ -z "$requirement" ]; then
+        printf 'The reference app has no stable signed identity; one-time permission migration is required.\n' >&2
+        exit 1
+    fi
+    /usr/bin/codesign --verify --deep --strict --all-architectures -R "=$requirement" "$app"
+fi
 /usr/bin/plutil -lint "$app/Contents/Info.plist"
 /usr/bin/lipo "$app/Contents/MacOS/YabaiMenu" -verify_arch x86_64 arm64
 /usr/bin/ditto -c -k --keepParent "$app" "$stage/new/$archive"

@@ -24,6 +24,11 @@ final class NativeRefreshTests: XCTestCase {
              "stack-index": 0, "frame": ["x": Double(id)]]
         }
         var queryCalls: [[String]] { calls.filter { $0.contains("query") } }
+        private func projected(_ window: [String: Any], fields: String) -> [String: Any] {
+            let included = Set(fields.split(separator: ",").map(String.init))
+            return window.filter { included.contains($0.key) }
+        }
+
         func run(_ path: String, _ args: [String]) async throws -> Data {
             calls.append(args)
             if args.contains("signal") { return Data("[]".utf8) }
@@ -35,8 +40,8 @@ final class NativeRefreshTests: XCTestCase {
                     guard let window = single ?? windows.first(where: { id == nil ? $0["has-focus"] as? Bool == true : $0["id"] as? Int == id }) else {
                         throw MenuError.message("could not retrieve window details.")
                     }
-                    object = window
-                } else { object = windows }
+                    object = projected(window, fields: args[3])
+                } else { object = windows.map { projected($0, fields: args[3]) } }
             } else if args.contains("--spaces") {
                 object = (1...2).map { index -> [String: Any] in
                     ["id": index, "index": index, "label": "Work", "display": index, "type": "bsp",
@@ -212,7 +217,7 @@ final class NativeRefreshTests: XCTestCase {
         let client = client(backend)
         await start(client); backend.calls.removeAll()
         XCTAssertEqual(client.snapshot?.focusedWindow?.id, 10)
-        client.scheduleFocusRefresh(11, native: true) // AX focus event for a window on the other display
+        client.scheduleFocusRefresh(11, nativePID: 123) // AX focus event for a window on the other display
         try? await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertNotEqual(client.snapshot?.focusedWindow?.id, 11, "Nothing runs until interaction is quiet")
         await waitFor { client.snapshot?.focusedWindow?.id == 11 }
@@ -226,7 +231,7 @@ final class NativeRefreshTests: XCTestCase {
                                 "is-sticky": false, "is-hidden": false, "is-minimized": false, "stack-index": 0, "frame": ["x": 12.0]])
         for i in backend.windows.indices where backend.windows[i]["id"] as? Int != 12 { backend.windows[i]["has-focus"] = false }
         // From AX, an unmanaged panel/popover ID is ignored: no yabai query, focus unchanged.
-        client.scheduleFocusRefresh(12, native: true)
+        client.scheduleFocusRefresh(12, nativePID: 123)
         try? await Task.sleep(nanoseconds: 600_000_000)
         XCTAssertTrue(backend.queryCalls.isEmpty, "Unmanaged AX focus must not cost yabai a query")
         XCTAssertEqual(client.snapshot?.focusedWindow?.id, 11)
@@ -286,7 +291,7 @@ final class NativeRefreshTests: XCTestCase {
         down = true
         backend.windows[0]["has-focus"] = false; backend.windows[1]["has-focus"] = true
         backend.windows[1]["frame"] = ["x": 500.0]
-        client.scheduleFocusRefresh(11, native: true)
+        client.scheduleFocusRefresh(11, nativePID: 123)
         client.scheduleMoveRefresh()
         // 按住但不继续移动，超过旧的三秒上限仍不得开始查询或绘制。
         try? await Task.sleep(nanoseconds: YabaiClient.maxDeferral + YabaiClient.quietPeriod + 50_000_000)
@@ -363,6 +368,68 @@ final class NativeRefreshTests: XCTestCase {
         await client.stop()
     }
 
+    func testFallbackDisplayFocusHonorsZeroDelayAndWaitsForMouseUp() async throws {
+        for suffixes in [[".display-focused", ".window-focused"],
+                         [".window-focused", ".display-focused"], [".display-focused"]] {
+            let backend = Backend()
+            let name = "test.native.\(UUID().uuidString)"
+            var held = false, handlers: [String: () -> Void] = [:]
+            let client = YabaiClient(path: "/fixture/yabai", notification: name, run: backend.run,
+                register: { name, handler in handlers[name] = handler; return 0 }, windowEvents: nil,
+                frontmostPID: { 123 }, readFocus: { _ in 11 }, delayAutomaticFocus: false, leftButtonDown: { held })
+            backend.windows[1]["space"] = 2
+            backend.windows[1]["display"] = 2
+            await start(client)
+            XCTAssertTrue(backend.calls.contains {
+                $0.contains("event=display_changed") && $0.contains("action=/usr/bin/notifyutil -p \(name).display-focused")
+            })
+            backend.calls.removeAll()
+            held = true
+            backend.focusedDisplay = 2
+            backend.windows[0]["has-focus"] = false
+            let hasFocusedWindow = suffixes.contains(".window-focused")
+            backend.windows[1]["has-focus"] = hasFocusedWindow
+            for suffix in suffixes { try XCTUnwrap(handlers[name + suffix])() }
+            try await Task.sleep(nanoseconds: 35_000_000)
+            XCTAssertTrue(backend.queryCalls.isEmpty)
+            XCTAssertEqual(client.snapshot?.focusedSpace?.index, 1)
+
+            held = false
+            client.resumeDeferredAfterMouseUp()
+            await waitFor({ client.snapshot?.focusedSpace?.index == 2 }, timeout: 0.22)
+            XCTAssertEqual(client.snapshot?.focusedWindow?.id, hasFocusedWindow ? 11 : nil)
+            XCTAssertEqual(backend.queryCalls.count, 3, "One authoritative refresh should cover either notification order")
+            await client.stop()
+        }
+    }
+
+    func testTopologyRefreshCannotReplayAnOlderSpaceAfterANewerSwitch() async {
+        for activeDisplaySignal in [false, true] {
+            let backend = Backend(); let client = client(backend, delayAutomaticFocus: false)
+            backend.windows[1]["space"] = 2
+            backend.windows[1]["display"] = 2
+            await start(client)
+            backend.calls.removeAll()
+            backend.holdNextWindows = true
+            client.refresh()
+            await waitFor { backend.releaseWindows != nil && backend.queryCalls.count == 3 }
+
+            backend.focusedDisplay = 2
+            backend.windows[0]["has-focus"] = false
+            backend.windows[1]["has-focus"] = true
+            var publications: [Int] = []
+            client.onUpdate = { state, _ in if let index = state?.focusedSpace?.index { publications.append(index) } }
+            if activeDisplaySignal { client.scheduleActiveDisplayRefresh() }
+            else { client.scheduleActiveSpaceRefresh() }
+            backend.releaseWindows?.resume()
+            backend.releaseWindows = nil
+
+            await waitFor { publications.contains(2) }
+            XCTAssertEqual(publications, [2], "An older in-flight snapshot must not repaint the previously active Space")
+            await client.stop()
+        }
+    }
+
     func testBothFocusDelaySettingsRespectHeldButtonAndPendingSettingChanges() async {
         for delay in [false, true] {
             let backend = Backend()
@@ -371,12 +438,12 @@ final class NativeRefreshTests: XCTestCase {
             await start(client); backend.calls.removeAll()
             var published = 0
             client.onUpdate = { _, _ in published += 1 }
-            client.scheduleFocusRefresh(11, native: true)
+            client.scheduleFocusRefresh(11, nativePID: 123)
             try? await Task.sleep(nanoseconds: 100_000_000)
             XCTAssertEqual(published, delay ? 0 : 1, "Only the 300 ms setting waits for a quiet focus")
             await waitFor { client.snapshot?.focusedWindow?.id == 11 }
             down = true
-            client.scheduleFocusRefresh(10, native: true)
+            client.scheduleFocusRefresh(10, nativePID: 123)
             client.delayAutomaticFocus = !delay
             try? await Task.sleep(nanoseconds: YabaiClient.quietPeriod + 50_000_000)
             XCTAssertEqual(published, 1, "Changing the delay must not bypass the held-button gate")
@@ -410,10 +477,85 @@ final class NativeRefreshTests: XCTestCase {
         // Switching apps: activation (no ID) plus an AX focus event for a panel yabai does not list.
         client.handleAppNotification(Notification(name: NSWorkspace.didActivateApplicationNotification,
                                                   userInfo: [NSWorkspace.applicationUserInfoKey: NSRunningApplication.current]))
-        client.scheduleFocusRefresh(999, native: true)
+        client.scheduleFocusRefresh(999, nativePID: 123)
         await waitFor { !backend.queryCalls.isEmpty }
         XCTAssertEqual(backend.queryCalls.first, ["-m", "query", "--windows", YabaiClient.windowFields, "--window"],
                        "The activation still resolves the app's focused window")
+        await client.stop()
+    }
+
+    func testAXFocusCannotAssignAReusedIDToAnotherProcess() async {
+        let backend = Backend(); let client = client(backend, delayAutomaticFocus: false)
+        await start(client); backend.calls.removeAll()
+        client.scheduleFocusRefresh(11, nativePID: 789)
+        try? await Task.sleep(nanoseconds: 40_000_000)
+        XCTAssertEqual(client.snapshot?.focusedWindow?.id, 10)
+        XCTAssertTrue(backend.queryCalls.isEmpty)
+        await client.stop()
+    }
+
+    func testYabaiFocusWhileAXIsReadyCoalescesHeldAndInFlightNotifications() async throws {
+        let backend = Backend(), ax = YabaiWindowEventsTests.Backend()
+        let observer = YabaiWindowEvents(trusted: { true }, subscribe: ax.subscribe, supportsTitles: true)
+        let notification = "test.yabai-confirm.\(UUID().uuidString)"
+        var callbacks: [String: () -> Void] = [:]
+        var held = false
+        var messageID = 11
+        let client = YabaiClient(path: "/fixture/yabai", notification: notification, run: backend.run,
+                                 register: { name, callback in callbacks[name] = callback; return 0 },
+                                 windowEvents: observer, frontmostPID: { 123 }, readFocus: { _ in messageID },
+                                 delayAutomaticFocus: false, leftButtonDown: { held })
+        client.startWindowObservation()
+        await start(client)
+        await waitFor { backend.queryCalls.count >= 6 }
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let signal = try XCTUnwrap(callbacks[notification + ".window-focused"])
+        backend.calls.removeAll()
+        var published: [Int?] = []
+        client.onUpdate = { snapshot, _ in published.append(snapshot?.focusedWindow?.id) }
+        backend.windows[0]["has-focus"] = false
+        backend.windows[1]["has-focus"] = true
+        backend.holdNextFocus = true
+        held = true
+        signal()
+        signal()
+        try await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertTrue(backend.queryCalls.isEmpty)
+        XCTAssertTrue(published.isEmpty)
+
+        held = false
+        client.resumeDeferredAfterMouseUp()
+        await waitFor { backend.releaseFocus != nil }
+        signal()
+        // A late AX event naming the old window must not supersede the yabai route.
+        ax.emit(.focused(id: 10, pid: 123))
+        try await Task.sleep(nanoseconds: 30_000_000)
+        backend.releaseFocus?.resume()
+        backend.releaseFocus = nil
+        await waitFor { client.snapshot?.focusedWindow?.id == 11 }
+        try await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertEqual(backend.queryCalls, [["-m", "query", "--windows", YabaiClient.windowFields, "--window"]])
+        XCTAssertEqual(published, [11])
+
+        messageID = 10
+        signal() // A late yabai child also names the old window. Read the real window, not its payload.
+        await waitFor { backend.queryCalls.count == 2 }
+        try await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertEqual(client.snapshot?.focusedWindow?.id, 11)
+        await client.stop()
+    }
+
+    func testUnmanagedAXFocusDoesNotEraseKnownYabaiFocus() async {
+        let backend = Backend(); let client = client(backend)
+        await start(client); backend.calls.removeAll()
+        backend.windows[0]["has-focus"] = false
+        backend.windows[1]["has-focus"] = true
+        client.scheduleFocusRefresh(11)
+        client.scheduleFocusRefresh(999, nativePID: 123)
+        await waitFor { client.snapshot?.focusedWindow?.id == 11 }
+        XCTAssertEqual(backend.queryCalls, [
+            ["-m", "query", "--windows", YabaiClient.windowFields, "--window", "11"]
+        ])
         await client.stop()
     }
 
@@ -569,6 +711,70 @@ final class NativeRefreshTests: XCTestCase {
         client.refresh(.focus(12))
         await waitFor { client.snapshot?.focusedWindow?.id == 12 }
         XCTAssertEqual(backend.queryCalls, [["-m", "query", "--windows", YabaiClient.windowFields, "--window", "12"]])
+        await client.stop()
+    }
+
+    func testTitleDemandChangesSubscriptionsAndOnlyReadsTitlesOnRequestWhenHidden() async throws {
+        let backend = Backend(), ax = YabaiWindowEventsTests.Backend()
+        let native = YabaiWindowEvents(trusted: { true }, subscribe: ax.subscribe,
+                                       resolve: { _, _, kind, _ in ax.recordRead(kind); return .value(nil) })
+        let client = YabaiClient(path: "/fixture/yabai", notification: "test.title-demand", run: backend.run,
+                                 register: { _, _ in 0 }, windowEvents: native, frontmostPID: { backend.foreground },
+                                 tracksWindowTitles: false, leftButtonDown: { ax.buttonDown })
+        client.start(observeSystem: false)
+        client.startWindowObservation()
+        await waitFor { client.snapshot != nil && ax.registered == [123] && ax.registeredTitles.isEmpty }
+        await waitFor { client.diagnosticLines.contains("Native window subscriptions: active") }
+        // Wait for the initial observer resync, independent of title notifications.
+        try await Task.sleep(nanoseconds: YabaiClient.quietPeriod + 70_000_000)
+        let focused = try XCTUnwrap(client.snapshot?.focusedWindow)
+        XCTAssertEqual(focused.title, "")
+        let before = backend.queryCalls
+        XCTAssertFalse(before.contains { $0.contains("--windows") && $0[3].split(separator: ",").contains("title") })
+        var updates = 0
+        client.onUpdate = { _, _ in updates += 1 }
+        backend.windows[0]["title"] = "New title"
+        let element = AXUIElementCreateApplication(123)
+        ax.emitObservation(.window(element, .title))
+        ax.emit(.titleChanged(id: focused.id, pid: focused.pid, element: element, title: "Late event"))
+        try await Task.sleep(nanoseconds: YabaiClient.quietPeriod + 25_000_000)
+        XCTAssertTrue(ax.resolved.isEmpty)
+        XCTAssertEqual(backend.queryCalls, before)
+        XCTAssertEqual(updates, 0)
+
+        let menuRequest = try XCTUnwrap(client.windowTitleRequest())
+        let menuTitles = await menuRequest()
+        let hoverTitles = await client.loadWindowTitles(for: focused)
+        XCTAssertEqual(menuTitles[10]?.title, "New title")
+        XCTAssertEqual(hoverTitles, [10: "New title"])
+        XCTAssertEqual(Array(backend.queryCalls.dropFirst(before.count)), [
+            ["-m", "query", "--windows", "id,pid,title"],
+            ["-m", "query", "--windows", "id,pid,title", "--window", "10"],
+        ])
+        XCTAssertEqual(client.snapshot?.focusedWindow?.title, "")
+        XCTAssertEqual(updates, 0, "An open menu or hover must not redraw the bar")
+        var wrongPID = backend.windows[0]
+        wrongPID["pid"] = 456
+        backend.single = wrongPID
+        let reused = await client.loadWindowTitles(for: focused)
+        XCTAssertTrue(reused.isEmpty)
+        backend.single = nil
+        ax.buttonDown = true
+        let heldCount = backend.queryCalls.count
+        let whilePressed = await client.loadWindowTitles(for: focused)
+        XCTAssertTrue(whilePressed.isEmpty)
+        XCTAssertEqual(backend.queryCalls.count, heldCount)
+        ax.buttonDown = false
+
+        client.setWindowTitleTracking(true)
+        await waitFor { ax.registeredTitles == [true] && client.snapshot?.focusedWindow?.title == "New title" }
+        ax.emitObservation(.window(element, .title))
+        await waitFor { ax.resolved == [.title] }
+        client.setWindowTitleTracking(false)
+        await waitFor { ax.registeredTitles == [true, false] && client.snapshot?.focusedWindow?.title == "" }
+        ax.emitObservation(.window(element, .title))
+        try await Task.sleep(nanoseconds: 40_000_000)
+        XCTAssertEqual(ax.resolved, [.title])
         await client.stop()
     }
 

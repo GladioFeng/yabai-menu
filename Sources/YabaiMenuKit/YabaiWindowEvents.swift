@@ -17,7 +17,7 @@ final class YabaiWindowEvents {
         case titleChanged(id: Int, pid: pid_t, element: AXUIElement, title: String?)
         case resynchronized
         case permissionLost
-        case subscriptionStatus(complete: Bool)
+        case subscriptionStatus(complete: Bool, titles: Bool, focus: Bool)
     }
     enum WindowNotification: Equatable { case focus, title }
 
@@ -31,7 +31,13 @@ final class YabaiWindowEvents {
         case deferred
     }
 
-    typealias Subscribe = (pid_t, @escaping (Observation) -> Void) -> (() -> Void)?
+    struct Subscription {
+        let cancel: () -> Void
+        let hasFocus: Bool
+        let setTitleTracking: (Bool) -> Bool
+    }
+
+    typealias Subscribe = (pid_t, @escaping (Observation) -> Void) -> Subscription?
     typealias Resolve = (pid_t, AXUIElement, WindowNotification, () -> Bool) -> ReadResult<Event>
 
     private let trusted: () -> Bool
@@ -70,7 +76,7 @@ final class YabaiWindowEvents {
         self.handler = handler
     }
 
-    func update(_ windows: [Window]) {
+    func update(_ windows: [Window], tracksTitles: Bool = true) {
         guard handler != nil else { return }
         guard trusted() else {
             if worker != nil { stopWorker(); handler?(.permissionLost) }
@@ -90,7 +96,11 @@ final class YabaiWindowEvents {
                 }
             }
         }
-        worker?.perform { $0.update(membership) }
+        worker?.perform { $0.update(membership, tracksTitles: tracksTitles) }
+    }
+
+    func setTitleDemand(_ enabled: Bool) {
+        worker?.perform { $0.setTitleDemand(enabled) }
     }
 
     func resumeAfterMouseUp() {
@@ -104,6 +114,7 @@ final class YabaiWindowEvents {
         let reader = titleReader, leftButtonDown = leftButtonDown
         let result = await withCheckedContinuation { (continuation: CheckedContinuation<ReadResult<String>, Never>) in
             worker.perform { state in
+                guard state.tracksTitles else { continuation.resume(returning: .value(nil)); return }
                 guard !automatic || !leftButtonDown() else { continuation.resume(returning: .deferred); return }
                 let title = reader(element)
                 // Reconciliation can change the service title without an AX event.
@@ -191,8 +202,9 @@ final class YabaiWindowEvents {
 
     private final class State {
         struct Entry {
-            let cancel: () -> Void
+            let subscription: Subscription
             var windows: Set<Int>
+            var titleTracking = false
             var titles: [(AXUIElement, String?)] = []
         }
         private struct PendingNotification {
@@ -208,7 +220,9 @@ final class YabaiWindowEvents {
         private let handler: (Event) -> Void
         private var entries: [pid_t: Entry] = [:]
         private var pending: [PendingNotification] = []
+        private var pendingMembership: [pid_t: Set<Int>]?
         private var releaseCheck: Timer?
+        private(set) var tracksTitles = true
 
         init(subscribe: @escaping Subscribe, leftButtonDown: @escaping () -> Bool,
              resolve: @escaping Resolve, handler: @escaping (Event) -> Void) {
@@ -218,10 +232,29 @@ final class YabaiWindowEvents {
             self.handler = handler
         }
 
-        func update(_ membership: [pid_t: Set<Int>]) {
+        func setTitleDemand(_ enabled: Bool) {
+            guard tracksTitles != enabled else { return }
+            tracksTitles = enabled
+            pending.removeAll { $0.kind == .title }
+            for pid in Array(entries.keys) { entries[pid]?.titles.removeAll() }
+            if pending.isEmpty && pendingMembership == nil {
+                releaseCheck?.invalidate()
+                releaseCheck = nil
+            }
+        }
+
+        func update(_ membership: [pid_t: Set<Int>], tracksTitles: Bool) {
+            setTitleDemand(tracksTitles)
+            pendingMembership = membership
+            flushWindowNotifications()
+        }
+
+        private func applyMembership(_ membership: [pid_t: Set<Int>]) -> Bool {
             var added = false
+            defer { if added { handler(.resynchronized) } }
             for pid in Array(entries.keys) where membership[pid] == nil {
-                entries.removeValue(forKey: pid)?.cancel()
+                guard !leftButtonDown() else { return false }
+                entries.removeValue(forKey: pid)?.subscription.cancel()
                 pending.removeAll { $0.pid == pid }
             }
             for (pid, windows) in membership {
@@ -230,13 +263,23 @@ final class YabaiWindowEvents {
                         entries[pid]?.windows = windows
                         entries[pid]?.titles.removeAll()
                     }
-                } else if let cancel = subscribe(pid, { [weak self] observation in self?.receive(observation, pid: pid) }) {
-                    entries[pid] = Entry(cancel: cancel, windows: windows)
-                    added = true
+                } else {
+                    guard !leftButtonDown() else { return false }
+                    if let subscription = subscribe(pid, { [weak self] observation in self?.receive(observation, pid: pid) }) {
+                        entries[pid] = Entry(subscription: subscription, windows: windows)
+                        added = true
+                    }
+                }
+                if let entry = entries[pid], entry.titleTracking != tracksTitles {
+                    guard !leftButtonDown() else { return false }
+                    entries[pid]?.titleTracking = entry.subscription.setTitleTracking(tracksTitles)
                 }
             }
-            handler(.subscriptionStatus(complete: entries.count == membership.count))
-            if added { handler(.resynchronized) }
+            let complete = entries.count == membership.count
+            handler(.subscriptionStatus(complete: complete,
+                                        titles: complete && entries.values.allSatisfy(\.titleTracking),
+                                        focus: complete && !entries.isEmpty && entries.values.allSatisfy { $0.subscription.hasFocus }))
+            return true
         }
 
         func invalidateTitle(_ element: AXUIElement) {
@@ -246,11 +289,12 @@ final class YabaiWindowEvents {
         }
 
         private func receive(_ observation: Observation, pid: pid_t) {
-            guard entries[pid] != nil else { return }
+            guard let entry = entries[pid] else { return }
             switch observation {
             case .event(let event):
                 deliver(event, pid: pid)
             case .window(let element, let kind):
+                guard kind != .title || (tracksTitles && entry.titleTracking) else { return }
                 // Coalesce by element before reading its window ID. Focus only needs the latest target.
                 pending.removeAll {
                     $0.kind == kind && (kind == .focus || ($0.pid == pid && CFEqual($0.element, element)))
@@ -260,16 +304,30 @@ final class YabaiWindowEvents {
             }
         }
 
-        func flushWindowNotifications() {
-            while !pending.isEmpty, !leftButtonDown() {
-                // A queued title lookup must not delay the latest focus after release.
-                let index = pending.firstIndex { $0.kind == .focus } ?? pending.startIndex
-                let next = pending[index]
-                guard case .value(let event) = resolve(next.pid, next.element, next.kind, leftButtonDown) else { break }
+        private func resolvePending(_ index: Int) -> Bool {
+            let next = pending[index]
+            if let membership = pendingMembership, membership[next.pid] == nil {
                 pending.remove(at: index)
-                if let event { deliver(event, pid: next.pid) }
+                return true
             }
-            if pending.isEmpty {
+            guard case .value(let event) = resolve(next.pid, next.element, next.kind, leftButtonDown) else { return false }
+            pending.remove(at: index)
+            if let event { deliver(event, pid: next.pid) }
+            return true
+        }
+
+        func flushWindowNotifications() {
+            // A queued subscription or title lookup must not delay the latest focus after release.
+            if !leftButtonDown(), let focus = pending.firstIndex(where: { $0.kind == .focus }) {
+                _ = resolvePending(focus)
+            }
+            if let membership = pendingMembership, !leftButtonDown(), applyMembership(membership) {
+                pendingMembership = nil
+            }
+            while !pending.isEmpty, !leftButtonDown() {
+                guard resolvePending(pending.startIndex) else { break }
+            }
+            if pending.isEmpty && pendingMembership == nil {
                 releaseCheck?.invalidate()
                 releaseCheck = nil
             } else if releaseCheck == nil {
@@ -289,7 +347,7 @@ final class YabaiWindowEvents {
             case .focused(_, let owner):
                 if owner == pid { handler(event) }
             case .titleChanged(_, let owner, let element, let title):
-                guard owner == pid else { return }
+                guard tracksTitles, entry.titleTracking, owner == pid else { return }
                 guard title != nil else {
                     invalidateTitle(element)
                     handler(event)
@@ -310,12 +368,13 @@ final class YabaiWindowEvents {
             releaseCheck?.invalidate()
             releaseCheck = nil
             pending.removeAll()
-            for entry in entries.values { entry.cancel() }
+            pendingMembership = nil
+            for entry in entries.values { entry.subscription.cancel() }
             entries.removeAll()
         }
     }
 
-    private static func subscribeNative(pid: pid_t, handler: @escaping (Observation) -> Void) -> (() -> Void)? {
+    private static func subscribeNative(pid: pid_t, handler: @escaping (Observation) -> Void) -> Subscription? {
         let subscription = AXSubscription(handler: handler)
         var observer: AXObserver?
         guard AXObserverCreate(pid, { _, element, notification, context in
@@ -325,35 +384,33 @@ final class YabaiWindowEvents {
         subscription.observer = observer
         let application = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(application, 0.2)
-        let names = nativeWindowIDReader == nil
-            ? [kAXWindowMovedNotification] : [kAXWindowMovedNotification, kAXTitleChangedNotification]
-        for name in names {
+        func add(_ name: String) -> Bool {
             let result = AXObserverAddNotification(observer, application, name as CFString,
                                                    Unmanaged.passUnretained(subscription).toOpaque())
-            if result == .success || result == .notificationAlreadyRegistered {
-                subscription.names.append(name)
-            }
+            guard result == .success || result == .notificationAlreadyRegistered else { return false }
+            if !subscription.names.contains(name) { subscription.names.append(name) }
+            return true
         }
-        guard subscription.names.count == names.count else {
-            for name in subscription.names {
-                AXObserverRemoveNotification(observer, application, name as CFString)
-            }
-            return nil // A partial subscription must be retried by the existing service check.
-        }
-        // Optional: focus falls back to NSWorkspace activation and yabai if an app refuses it.
-        if nativeWindowIDReader != nil {
-            let focus = kAXFocusedWindowChangedNotification
-            let result = AXObserverAddNotification(observer, application, focus as CFString,
-                                                   Unmanaged.passUnretained(subscription).toOpaque())
-            if result == .success || result == .notificationAlreadyRegistered { subscription.names.append(focus) }
-        }
+
+        guard add(kAXWindowMovedNotification) else { return nil }
+        let hasFocus = nativeWindowIDReader != nil && add(kAXFocusedWindowChangedNotification)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(observer), .defaultMode)
-        return {
+        return Subscription(cancel: {
             CFRunLoopSourceInvalidate(AXObserverGetRunLoopSource(observer))
             for name in subscription.names {
                 AXObserverRemoveNotification(observer, application, name as CFString)
             }
-        }
+        }, hasFocus: hasFocus, setTitleTracking: { enabled in
+            let name = kAXTitleChangedNotification
+            if enabled { return nativeWindowIDReader != nil && add(name) }
+            guard subscription.names.contains(name) else { return false }
+            let result = AXObserverRemoveNotification(observer, application, name as CFString)
+            if result == .success || result == .notificationNotRegistered {
+                subscription.names.removeAll { $0 == name }
+                return false
+            }
+            return true
+        })
     }
 
     private final class AXSubscription {

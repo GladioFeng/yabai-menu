@@ -351,10 +351,11 @@ final class DisplayTests: XCTestCase {
         let onscreen = Set((CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? []).compactMap { $0[kCGWindowNumber as String] as? Int })
         let nativeSlots = NSApp.windows.filter { $0.level == .statusBar && MenuBarHosts.anchorFrame($0, screen: screen.frame, onscreen: onscreen) != nil }
         guard nativeSlots.count == 1 else { throw XCTSkip("Unhide the test status item before comparing native backgrounds") }
-        XCTAssertTrue(local.bar.window === slot && allBar.window == nil)
+        XCTAssertTrue(local.panel.isVisible, "A valid native slot must produce a visible overlay")
         let localCell = try XCTUnwrap(local.bar.subviews.first)
-        let localRect = local.bar.convert(localCell.frame.insetBy(dx: 0.5, dy: 0.5), to: nil)
-        let localPaintedHeight = try paintedHeight(local.content, name: "local")
+        let localRect = local.panel.convertToScreen(local.bar.convert(localCell.frame.insetBy(dx: 0.5, dy: 0.5), to: nil))
+            .offsetBy(dx: -slot.frame.minX, dy: -slot.frame.minY)
+        let localPaintedHeight = try paintedHeight(try XCTUnwrap(local.panel.contentView), name: "local")
         XCTAssertEqual(localRect.minY, allRect.minY, accuracy: 0.5)
         XCTAssertEqual(localRect.height, allRect.height, accuracy: 0.5)
         XCTAssertEqual(localPaintedHeight, allPaintedHeight, accuracy: 0.5)
@@ -428,8 +429,8 @@ final class DisplayTests: XCTestCase {
         settings.placement = .menuBar; settings.spaceScope = .focusedDisplay
         settings.showSpaceIcons = false; settings.showCreateSpace = false
         let snapshot = try state()
-        func update() -> CGFloat {
-            hosts.update(snapshot, settings: settings, status: ConnectionStatus(mode: .live), icon: { _ in nil }, menu: { _ in nil }, select: { _ in })
+        func update(command: Bool = false) -> CGFloat {
+            hosts.update(snapshot, settings: settings, status: ConnectionStatus(mode: .live), commandDown: command, icon: { _ in nil }, menu: { _ in nil }, select: { _ in })
         }
         let width = update()
         for slot in slots {
@@ -440,9 +441,11 @@ final class DisplayTests: XCTestCase {
         _ = update()
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.15))
         let left = try XCTUnwrap(hosts.hosts[101]), right = try XCTUnwrap(hosts.hosts[202])
-        XCTAssertTrue(left.bar.window === slots[0] && right.bar.window === slots[1])
-        XCTAssertTrue(slots.allSatisfy { $0.occlusionState.contains(.visible) })
-        XCTAssertNil(left.content.hitTest(NSPoint(x: left.content.frame.midX, y: left.content.frame.midY)))
+        XCTAssertTrue(left.panel.isVisible && right.panel.isVisible)
+        let onscreen = Set((CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? [])
+            .compactMap { $0[kCGWindowNumber as String] as? Int })
+        XCTAssertTrue(slots.allSatisfy { onscreen.contains($0.windowNumber) }, "Transparent overlays must not hide their own native anchors")
+        XCTAssertFalse(left.panel.hasShadow || left.panel.canBecomeKey)
         XCTAssertEqual(left.bar.frame.height, 24)
         XCTAssertEqual(right.bar.frame.height, 37)
         anchors.reverse(); _ = update()
@@ -452,32 +455,85 @@ final class DisplayTests: XCTestCase {
         XCTAssertEqual(right.bar.cells.map(\.display), [2, 2, 2])
         XCTAssertEqual(left.bar.cells.filter(\.currentSpace).map(\.text), ["[1]"])
         XCTAssertEqual(right.bar.cells.filter(\.currentSpace).map(\.text), ["[4]"])
-        let old = try XCTUnwrap(left.frameOnScreen)
-        XCTAssertTrue(slots[0].frame.contains(old))
+        XCTAssertTrue(slots[0].frame.contains(left.panel.frame))
+        let old = left.panel.frame
         slots[0].setFrameOrigin(NSPoint(x: slots[0].frame.minX + 25, y: slots[0].frame.minY))
-        XCTAssertEqual(left.frameOnScreen?.minX, old.minX + 25, "Content must move with its native slot without another refresh")
+        _ = update()
+        XCTAssertEqual(left.panel.frame.minX, old.minX + 25)
+        _ = update(command: true)
+        XCTAssertTrue(left.panel.isVisible && right.panel.isVisible, "Command must keep the bar visible")
+        XCTAssertTrue(left.panel.ignoresMouseEvents && right.panel.ignoresMouseEvents)
+        _ = update()
+        XCTAssertTrue(left.panel.isVisible && right.panel.isVisible)
+        XCTAssertFalse(left.panel.ignoresMouseEvents || right.panel.ignoresMouseEvents)
         slots[0].orderOut(nil); _ = update()
-        XCTAssertNil(left.bar.window)
-        XCTAssertTrue(right.bar.window === slots[1])
+        XCTAssertFalse(left.panel.isVisible)
+        XCTAssertTrue(right.panel.isVisible)
         slots[0].orderFrontRegardless()
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
         anchors = [slots[0], slots[0], slots[1]]; _ = update()
-        XCTAssertNil(left.bar.window, "Ambiguous slot matches must fail closed")
+        XCTAssertFalse(left.panel.isVisible, "Ambiguous slot matches must fail closed")
         anchors = slots
         settings.fontSize = 20
         let wider = update()
-        XCTAssertTrue(left.bar.window === slots[0] && right.bar.window === slots[1], "Keep the old content while the native slot acquires the new width")
-        XCTAssertTrue(slots[0].frame.contains(try XCTUnwrap(left.frameOnScreen)))
-        XCTAssertTrue(slots[1].frame.contains(try XCTUnwrap(right.frameOnScreen)))
+        XCTAssertTrue(left.panel.isVisible && right.panel.isVisible, "Keep the old content while the native slot acquires the new width")
+        XCTAssertTrue(slots[0].frame.contains(left.panel.frame) && slots[1].frame.contains(right.panel.frame))
         for slot in slots { slot.setContentSize(NSSize(width: wider + 2, height: slot.frame.height)) }
         _ = update()
         XCTAssertTrue(hosts.hosts[101] === left)
-        XCTAssertTrue(slots[0].frame.contains(try XCTUnwrap(left.frameOnScreen)))
+        XCTAssertTrue(slots[0].frame.contains(left.panel.frame))
         screens.removeLast(); _ = update()
-        XCTAssertNil(hosts.hosts[202]); XCTAssertNil(right.bar.window)
+        XCTAssertNil(hosts.hosts[202]); XCTAssertFalse(right.panel.isVisible)
     }
 
-    func testLocalMenuClicksThroughEachNativeSlot() throws {
+    func testFocusedDisplayKeepsNativeRecoveryMenuUntilAUsableSlotReturns() async throws {
+        guard ProcessInfo.processInfo.environment["YABAI_MENU_UI_TESTS"] == "1" else { throw XCTSkip("AppKit session required") }
+        _ = NSApplication.shared
+        let screen = MenuBarHosts.Screen(id: 101, index: 1, frame: NSRect(x: 100, y: 100, width: 1000, height: 700))
+        let slot = FloatingBarPanel(contentRect: NSRect(x: screen.frame.midX, y: screen.frame.maxY - 24, width: 100, height: 24),
+                                    styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let otherSlot = FloatingBarPanel(contentRect: slot.frame, styleMask: [.borderless, .nonactivatingPanel],
+                                         backing: .buffered, defer: false)
+        for window in [slot, otherSlot] { window.isReleasedWhenClosed = false; window.level = .statusBar }
+        var slots: [NSWindow] = [], calls = 0, held = true
+        let hosts = MenuBarHosts(screens: { _ in [screen] }, anchors: { calls += 1; return slots })
+        var settings = AppSettings()
+        settings.placement = .menuBar; settings.spaceScope = .focusedDisplay
+        let controller = MenuBarController(settings: settings, menuBarHosts: hosts, menuAnchorMouseDown: { held })
+        controller.setupItem()
+        let item = try XCTUnwrap(controller.statusItem)
+        defer { hosts.close(); slot.close(); otherSlot.close(); NSStatusBar.system.removeStatusItem(item) }
+
+        let snapshot = try state()
+        let live = ConnectionStatus(mode: .live)
+        controller.update(snapshot, status: live)
+        XCTAssertEqual(item.button?.title, "Yabai")
+        XCTAssertTrue(item.menu === controller.fullMenu, "The native menu must open while its overlay is unavailable")
+        let initialCalls = calls
+        let ready = try XCTUnwrap(hosts.hosts[101])
+        XCTAssertFalse(ready.panel.isVisible)
+        slot.setContentSize(NSSize(width: item.length, height: 24))
+        slots = [slot]; slot.orderFrontRegardless()
+        NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: slot)
+        try await Task.sleep(nanoseconds: 35_000_000)
+        XCTAssertEqual(calls, initialCalls, "Native-slot reconciliation should wait until the current mouse hold ends")
+        held = false
+        let deadline = Date(timeIntervalSinceNow: 2)
+        while !ready.panel.isVisible && Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertTrue(ready.panel.isVisible)
+        XCTAssertNil(item.menu)
+        XCTAssertEqual(item.button?.title, "")
+
+        otherSlot.setContentSize(slot.frame.size)
+        slots = [slot, otherSlot]; otherSlot.orderFrontRegardless()
+        try await Task.sleep(nanoseconds: 60_000_000)
+        controller.update(snapshot, status: live, force: true)
+        XCTAssertFalse(ready.panel.isVisible, "Two distinct slots on one screen must not leave old click targets visible")
+        XCTAssertTrue(item.menu === controller.fullMenu)
+        XCTAssertEqual(item.button?.title, "Yabai")
+    }
+
+    func testLocalMenuClicksThroughNativeSlotAndOnInactivePanel() throws {
         guard ProcessInfo.processInfo.environment["YABAI_MENU_UI_TESTS"] == "1" else { throw XCTSkip("AppKit session required") }
         _ = NSApplication.shared
         let screens = [MenuBarHosts.Screen(id: 101, index: 1, frame: NSRect(x: 100, y: 100, width: 1000, height: 700)),
@@ -501,33 +557,38 @@ final class DisplayTests: XCTestCase {
         controller.update(snapshot, status: ConnectionStatus(mode: .live), force: true)
         XCTAssertEqual(width, hosts.hosts.values.map { $0.bar.frame.width }.max(), "A ready slot must not reserve an extra ellipsis")
         var choices: [(Int?, Int?)] = []
-        controller.focusAction = { choices.append(($0, $1)) }
+        controller.focusAction = { space, window, _ in choices.append((space, window)) }
         for (index, screen) in screens.enumerated() {
             let host = try XCTUnwrap(hosts.hosts[screen.id])
-            XCTAssertTrue(host.bar.window === slots[index])
+            XCTAssertTrue(host.panel.isVisible)
             XCTAssertNotNil(host.bar.menu?.items.first { $0.title == "Settings…" })
+            XCTAssertNotNil(host.panel.contentView?.menu)
             let inactive = screen.index == 1 ? 12 : 15
             let window = screen.index == 1 ? 101 : 104
-            for target in [BarTarget.space(inactive), .window(window, screen.index == 1 ? 11 : 14)] {
+            for target in [BarTarget.space(inactive), .window(window, screen.index == 1 ? 11 : 14, pid: screen.index == 1 ? 1001 : 1004)] {
                 let cell = try XCTUnwrap(host.bar.cells.firstIndex { $0.target == target })
                 let view = host.bar.subviews[cell]
-                let onSlot = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+                let onPanel = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+                let global = host.panel.convertPoint(toScreen: onPanel)
+                let onSlot = slots[index].convertPoint(fromScreen: global)
                 let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: onSlot, modifierFlags: [], timestamp: 0, windowNumber: slots[index].windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
                 let up = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseUp, location: onSlot, modifierFlags: [], timestamp: 0.01, windowNumber: slots[index].windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: 0))
                 NSApp.sendEvent(down); NSApp.sendEvent(up)
             }
             let cell = try XCTUnwrap(host.bar.cells.firstIndex { $0.target == .space(inactive) })
             let view = host.bar.subviews[cell]
+            XCTAssertTrue(view.acceptsFirstMouse(for: nil))
+            XCTAssertFalse(view.needsPanelToBecomeKey || view.mouseDownCanMoveWindow)
             let point = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
-            let commandClick = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point,
-                modifierFlags: [.command], timestamp: 0, windowNumber: slots[index].windowNumber, context: nil,
-                eventNumber: 3, clickCount: 1, pressure: 1))
-            XCTAssertTrue(controller.handleStatusMouse(commandClick) === commandClick, "Command-drag must reach the system status item")
+            let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0, windowNumber: host.panel.windowNumber, context: nil, eventNumber: 3, clickCount: 1, pressure: 1))
+            let up = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [], timestamp: 0.01, windowNumber: host.panel.windowNumber, context: nil, eventNumber: 4, clickCount: 1, pressure: 0))
+            NSApp.postEvent(up, atStart: false)
+            host.panel.sendEvent(down)
         }
-        XCTAssertEqual(choices.count, 4)
-        if choices.count == 4 {
-            XCTAssertEqual(choices[0].0, 2); XCTAssertEqual(choices[1].1, 101)
-            XCTAssertEqual(choices[2].0, 5); XCTAssertEqual(choices[3].1, 104)
+        XCTAssertEqual(choices.count, 6)
+        if choices.count == 6 {
+            XCTAssertEqual(choices[0].0, 2); XCTAssertEqual(choices[1].1, 101); XCTAssertEqual(choices[2].0, 2)
+            XCTAssertEqual(choices[3].0, 5); XCTAssertEqual(choices[4].1, 104); XCTAssertEqual(choices[5].0, 5)
         }
         XCTAssertNil(controller.statusItem?.menu)
     }
@@ -639,9 +700,9 @@ final class DisplayTests: XCTestCase {
         XCTAssertNotNil(left.backdrop.material.maskImage)
         XCTAssertTrue(left.panel.collectionBehavior.contains(.fullScreenAuxiliary))
         XCTAssertEqual(left.bar.cells.filter { if case .space = $0.target { return true }; return false }.map(\.display), [1, 1, 1])
-        let index = try XCTUnwrap(right.bar.cells.firstIndex { $0.target == .window(104, 14) })
+        let index = try XCTUnwrap(right.bar.cells.firstIndex { $0.target == .window(104, 14, pid: 1004) })
         (right.bar.subviews[index] as? NSButton)?.performClick(nil)
-        XCTAssertEqual(selected, .window(104, 14))
+        XCTAssertEqual(selected, .window(104, 14, pid: 1004))
         let beforeClick = left.panel.frame
         bars.onDragFinished = { update() }
         left.handle.beginDrag(at: NSPoint(x: 200, y: 200))
@@ -730,15 +791,14 @@ final class DisplayTests: XCTestCase {
         XCTAssertEqual(menus, 200, "One context menu per host/update, shared by all three surfaces")
         XCTAssertTrue(bars.hosts[101] === host)
         XCTAssertTrue(host.handle.menu === host.bar.menu && host.bar.menu === host.panel.contentView?.menu)
-        XCTAssertEqual(host.panel.collectionBehavior, [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary])
+        XCTAssertTrue(host.panel.collectionBehavior.contains(.fullScreenAuxiliary))
         XCTAssertEqual(host.panel.appearance?.name, .darkAqua)
-        settings.placement = .docked
         settings.floatingAboveFullscreen = false
         settings.colorPreset = .catppuccinLatte
         settings.floatingOpacity = 70
         settings.floatingLocked = true
         update(try state())
-        XCTAssertEqual(host.panel.collectionBehavior, [.canJoinAllSpaces, .stationary, .ignoresCycle])
+        XCTAssertFalse(host.panel.collectionBehavior.contains(.fullScreenAuxiliary))
         XCTAssertEqual(host.panel.appearance?.name, .aqua)
         XCTAssertEqual(host.panel.alphaValue, 0.7, accuracy: 0.001)
         XCTAssertEqual(host.handle.menu?.items.first?.state, .on)
@@ -813,8 +873,8 @@ final class DisplayTests: XCTestCase {
         bar.configure(try finder(focused: 202), settings: settings, display: 1, icon: icon)
         XCTAssertEqual(bar.subviews.map(ObjectIdentifier.init), original, "A focus change must not rebuild every button")
         XCTAssertEqual(loads, [], "Same-PID cells must keep their cached icon")
-        XCTAssertTrue(bar.cells.contains { $0.target == .window(202, 11) && !$0.isProcess })
-        XCTAssertTrue(bar.cells.contains { $0.target == .window(202, nil) && $0.isProcess })
+        XCTAssertTrue(bar.cells.contains { $0.target == .window(202, 11, pid: 500) && !$0.isProcess })
+        XCTAssertTrue(bar.cells.contains { $0.target == .window(202, nil, pid: 500) && $0.isProcess })
         for (index, cell) in bar.cells.enumerated() {
             (bar.subviews[index] as? NSButton)?.performClick(nil)
             XCTAssertEqual(selected, cell.target, "Reused button \(index) must click its new target")
@@ -831,7 +891,7 @@ final class DisplayTests: XCTestCase {
         bar.configure(try finder(focused: 201), settings: settings, display: 1, icon: icon)
         XCTAssertFalse(bar.subviews.contains { $0 === pressed })
         pressed.performClick(nil)
-        XCTAssertEqual(selected, .window(203, nil))
+        XCTAssertEqual(selected, .window(203, nil, pid: 600))
     }
 
     func testHandleUsesQueuedEventCoordinatesAndFinalMouseUpPosition() throws {
@@ -863,6 +923,33 @@ final class DisplayTests: XCTestCase {
         handle.mouseUp(with: try event(.leftMouseUp, NSPoint(x: 300, y: 300)))
         XCTAssertEqual(panel.frame.origin, NSPoint(x: 250, y: 218))
         XCTAssertEqual(saves, 1)
+    }
+
+    func testVisibleBarRepaintsWhenItsInheritedAppearanceChanges() throws {
+        guard ProcessInfo.processInfo.environment["YABAI_MENU_UI_TESTS"] == "1" else { throw XCTSkip("AppKit session required") }
+        _ = NSApplication.shared
+        let panel = FloatingBarPanel(contentRect: NSRect(x: 100, y: 100, width: 300, height: 26),
+                                     styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        defer { panel.close() }
+        let bar = WidgetBarView()
+        panel.contentView?.addSubview(bar)
+        panel.appearance = NSAppearance(named: .aqua)
+        panel.orderFrontRegardless()
+        var settings = AppSettings()
+        settings.colorPreset = .mint
+        settings.showSpaceIcons = false
+        bar.configure(try state(), settings: settings, height: 24) { _ in nil }
+        let button = try XCTUnwrap(bar.subviews.compactMap { $0 as? WidgetButton }.first)
+        let identity = bar.cells.map(\.target)
+        bar.needsDisplay = false
+        button.needsDisplay = false
+        panel.appearance = NSAppearance(named: .darkAqua)
+        XCTAssertEqual(bar.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .darkAqua)
+        XCTAssertTrue(bar.needsDisplay, "The existing bar must repaint its custom background")
+        XCTAssertTrue(button.needsDisplay, "The existing text must repaint with the new system foreground")
+        XCTAssertEqual(bar.cells.map(\.target), identity)
+        XCTAssertTrue(bar.subviews.contains { $0 === button }, "Repainting must keep the existing click targets")
     }
 
     func testBackdropMaskReuseAndPaletteAppearance() {

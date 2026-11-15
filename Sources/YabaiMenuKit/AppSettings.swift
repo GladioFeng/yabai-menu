@@ -76,6 +76,15 @@ struct AppSettings: Equatable {
 
     var effectivePlacement: Placement { placement }
 
+    var needsLiveWindowTitles: Bool {
+        if windowScope != .hidden, showWindowTitle, !processOnlyIcon { return true }
+        guard spaceScope != .hidden, showSpaceIcons else { return false }
+        return titleExclusions.split(separator: ",").contains { entry in
+            let pattern = entry.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !pattern.isEmpty && (!exclusionsAsRegex || (try? NSRegularExpression(pattern: pattern)) != nil)
+        }
+    }
+
     var resolvedPath: String? {
         if !yabaiPath.isEmpty { return (yabaiPath as NSString).expandingTildeInPath }
         return ["/opt/homebrew/bin/yabai", "/usr/local/bin/yabai"].first {

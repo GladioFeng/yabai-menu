@@ -2,6 +2,22 @@
 
 ## 1.0.0 — release candidate
 
+- Build 57: keep yabai's proven window-focus signal when Accessibility is enabled, coalesce duplicate notifications, and confirm the current focus instead of trusting a stale payload.
+
+- Build 55: scope window selection to the live active Space, check ownership in parallel, and keep yabai's Mission Control guard.
+
+- Build 54: focus a verified ordinary window in the current Space directly, skipping the Space list and redundant Space focus command.
+
+- Build 53: honor the 0 ms focus setting for yabai's display-focus fallback after mouse release, while keeping the separate debounce for Space changes.
+
+- Build 52: keep the native menu available while per-display menu-bar slots recover, wait for mouse release before repositioning their overlays, and discard in-flight snapshots made obsolete by a newer Space change.
+
+- Build 51: recheck window ownership before focusing, retain yabai focus events when Accessibility reports an unmanaged popup, and defer Accessibility subscription changes and automatic post-action refreshes during mouse holds.
+
+- Build 50: validate menu titles and actions against the window's process, skip title queries on brief pointer passes, and keep movement and focus observers active if title registration fails.
+
+- Build 49 (based on build 42): track window titles only for visible Process text or Space title filters. Open the full menu or hover over a window icon to read its title on demand.
+
 - Build 44: host per-display menu-bar content in the same native status slots as All displays, including in Mission Control. Restore the previous behavior for standalone bars.
 
 - Build 43: hide the bar panels while Mission Control is open.

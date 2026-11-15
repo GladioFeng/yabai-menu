@@ -16,6 +16,36 @@ final class SettingsTests: XCTestCase {
         XCTAssertFalse(AppSettings(defaults: defaults).delayAutomaticFocus)
     }
 
+    func testLiveTitlesFollowVisibleProcessAndSpaceIconOptions() {
+        var settings = AppSettings()
+        settings.windowScope = .hidden
+        settings.spaceScope = .all
+        settings.showSpaceIcons = true
+        settings.showWindowTitle = true
+        XCTAssertFalse(settings.needsLiveWindowTitles)
+        settings.titleExclusions = " ,   "
+        XCTAssertFalse(settings.needsLiveWindowTitles)
+        settings.titleExclusions = "Private title"
+        XCTAssertTrue(settings.needsLiveWindowTitles)
+        settings.showSpaceIcons = false
+        settings.hideEmptySpaces = true
+        XCTAssertFalse(settings.needsLiveWindowTitles, "Occupancy does not require titles")
+        settings.showSpaceIcons = true
+        settings.spaceScope = .hidden
+        XCTAssertFalse(settings.needsLiveWindowTitles)
+        settings.windowScope = .focused
+        XCTAssertTrue(settings.needsLiveWindowTitles)
+        settings.processOnlyIcon = true
+        XCTAssertFalse(settings.needsLiveWindowTitles)
+        settings.processOnlyIcon = false
+        settings.showWindowTitle = false
+        XCTAssertFalse(settings.needsLiveWindowTitles)
+        settings.spaceScope = .all
+        settings.exclusionsAsRegex = true
+        settings.titleExclusions = "["
+        XCTAssertFalse(settings.needsLiveWindowTitles)
+    }
+
     @MainActor
     func testPreviewHeightFitsActualBarInsteadOfReservingMaximum() throws {
         guard ProcessInfo.processInfo.environment["YABAI_MENU_UI_TESTS"] == "1" else { throw XCTSkip("AppKit session required") }
@@ -43,7 +73,7 @@ final class SettingsTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         var settings = AppSettings(); settings.placement = .floating
         let controller = MenuBarController(settings: settings, defaults: defaults)
-        for target in [BarTarget.menu, .space(1), .window(1, 1)] {
+        for target in [BarTarget.menu, .space(1), .window(1, 1, pid: 123)] {
             XCTAssertNotNil(controller.barContextMenu(target).items.first { $0.title == "Lock Floating Bar Position" })
         }
         let lock = try XCTUnwrap(controller.barContextMenu(.menu).items.first { $0.title == "Lock Floating Bar Position" })

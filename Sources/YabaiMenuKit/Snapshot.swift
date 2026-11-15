@@ -29,7 +29,8 @@ struct Window: Decodable, Equatable {
     let id: Int
     let pid: Int32
     let app: String
-    private(set) var title: String
+    private var fetchedTitle: String?
+    var title: String { fetchedTitle ?? "" }
     let subrole: String?
     let display: Int?
     let space: Int
@@ -45,12 +46,13 @@ struct Window: Decodable, Equatable {
     var layout: String { floating ? "float" : (stackIndex > 0 ? "stack" : "bsp") }
     var state: String { layout + (sticky ? " · sticky" : "") }
     enum CodingKeys: String, CodingKey {
-        case id, pid, app, title, subrole, display, space, frame
+        case id, pid, app, subrole, display, space, frame
+        case fetchedTitle = "title"
         case focused = "has-focus", visible = "is-visible", floating = "is-floating", sticky = "is-sticky"
         case hidden = "is-hidden", minimized = "is-minimized", stackIndex = "stack-index"
     }
-    func replacingTitle(_ title: String) -> Window {
-        var window = self; window.title = title; return window
+    func replacingTitle(_ title: String?) -> Window {
+        var window = self; window.fetchedTitle = title; return window
     }
     fileprivate mutating func setFocus(_ focused: Bool) { self.focused = focused }
 }
@@ -150,10 +152,14 @@ struct Snapshot: Equatable {
 enum MenuError: LocalizedError {
     case message(String)
     case alreadyFocusedSpace
+    case windowUnavailable
+    case activeSpaceUnavailable
     var errorDescription: String? {
         switch self {
         case .message(let text): return text
         case .alreadyFocusedSpace: return "The Space is already focused."
+        case .windowUnavailable: return "That window is no longer available."
+        case .activeSpaceUnavailable: return "Cannot read the active Space."
         }
     }
 }

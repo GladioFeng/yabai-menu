@@ -6,11 +6,13 @@ import AppKit
 import CoreText
 
 enum BarTarget: Equatable {
-    case space(Int), window(Int, Int?), create(Int), menu
+    case space(Int), window(Int, Int?, pid: Int32), create(Int), menu
 }
 
 @MainActor
 final class WidgetBarView: NSView {
+    typealias LoadTitle = (Window) async -> String?
+
     struct Cell: Equatable {
         var text: String
         var spaceName: String?
@@ -65,6 +67,7 @@ final class WidgetBarView: NSView {
     private(set) var displaySeparators: [CGFloat] = []
     var onSelect: ((BarTarget) -> Void)?
     var contextMenu: ((BarTarget) -> NSMenu?)?
+    var loadTitle: LoadTitle?
     override var intrinsicContentSize: NSSize { frame.size }
 
     func cell(at point: NSPoint) -> (target: BarTarget, frame: NSRect)? {
@@ -113,9 +116,9 @@ final class WidgetBarView: NSView {
             if !title.isEmpty { text += " " + title }
             return Cell(text: text,
                         symbol: style == .icon ? layoutSymbol(window.layout) : nil, window: window,
-                        target: .window(window.id, space?.id), group: group,
+                        target: .window(window.id, space?.id, pid: window.pid), group: group,
                         focus: space == nil ? window.focused : active, visible: space?.visible ?? false, display: space?.display ?? window.display, isProcess: process,
-                        tooltip: "\(window.app) — \(window.title) · \(window.state)\(window.stackIndex == 0 ? "" : " · Stack \(window.stackIndex)")",
+                        tooltip: Self.windowTooltip(window, title: window.title),
                         opacity: window.focused ? 1 : CGFloat(settings.unfocusedBrightness) / 100)
         }
         var rows = [Cell]()
@@ -327,11 +330,7 @@ final class WidgetBarView: NSView {
                 button.action = #selector(selected(_:))
                 button.isBordered = false
             }
-            let tooltip = cell.tooltip + " · Right-click for menu and settings"
-            if button.toolTip != tooltip {
-                button.toolTip = tooltip
-                button.setAccessibilityLabel(tooltip)
-            }
+            button.syncTooltip(from: previous, canLoadTitle: loadTitle != nil && enabled)
             if !reused { addSubview(button) }
         }
         let resized = frame.size != layout.size
@@ -378,10 +377,15 @@ final class WidgetBarView: NSView {
         // A refresh can replace the visible list while AppKit is still tracking this button.
         if let target = (sender as? WidgetButton)?.cellInfo.target { onSelect?(target) }
     }
+
+    fileprivate static func windowTooltip(_ window: Window, title: String) -> String {
+        let name = title.isEmpty ? window.app : "\(window.app) — \(title)"
+        return "\(name) · \(window.state)\(window.stackIndex == 0 ? "" : " · Stack \(window.stackIndex)")"
+    }
 }
 
 @MainActor
-private final class WidgetButton: NSButton {
+final class WidgetButton: NSButton {
     weak var owner: WidgetBarView?
     override var isFlipped: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -396,6 +400,79 @@ private final class WidgetButton: NSButton {
     var iconSize: CGFloat = 16
     var layoutSize: CGFloat = 16
     var underline = false
+    private var titleArea: NSTrackingArea?
+    private var hoverTask: Task<Void, Never>?
+    private var hoverTitle: String?
+
+    func syncTooltip(from previous: WidgetBarView.Cell?, canLoadTitle: Bool) {
+        let tracksTitle = canLoadTitle && cellInfo.window != nil
+        if tracksTitle != (titleArea != nil) {
+            if let titleArea { removeTrackingArea(titleArea); self.titleArea = nil }
+            else {
+                let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+                addTrackingArea(area)
+                titleArea = area
+            }
+        }
+        if !tracksTitle || previous?.window?.id != cellInfo.window?.id || previous?.window?.pid != cellInfo.window?.pid
+            || previous?.window?.title != cellInfo.window?.title { clearHoverTitle() }
+        else { setTooltip() }
+        let label = cellInfo.tooltip + " · Right-click for menu and settings"
+        if previous?.tooltip != cellInfo.tooltip { setAccessibilityLabel(label) }
+    }
+
+    private func setTooltip() {
+        guard let cell = cellInfo else { return }
+        let base = if let window = cell.window, let hoverTitle { WidgetBarView.windowTooltip(window, title: hoverTitle) }
+                   else { cell.tooltip }
+        let hint = base + " · Right-click for menu and settings"
+        if toolTip != hint { toolTip = hint }
+    }
+
+    private func clearHoverTitle() {
+        hoverTask?.cancel()
+        hoverTask = nil
+        hoverTitle = nil
+        setTooltip()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if window !== newWindow { clearHoverTitle() }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        guard let titleArea, event.trackingArea === titleArea else {
+            super.mouseEntered(with: event); return
+        }
+        beginTitleHover()
+    }
+
+    func beginTitleHover() {
+        guard let target = cellInfo?.window, let loadTitle = owner?.loadTitle else { return }
+        clearHoverTitle()
+        // A pointer sweeping across icons should not start one yabai process per icon.
+        hoverTask = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: 150_000_000) } catch { return }
+            guard !Task.isCancelled, self?.canLoadHoverTitle == true else { return }
+            guard let title = await loadTitle(target), !Task.isCancelled, let self, canLoadHoverTitle,
+                  cellInfo.window?.id == target.id, cellInfo.window?.pid == target.pid else { return }
+            hoverTitle = title
+            setTooltip()
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if let titleArea, event.trackingArea === titleArea { endTitleHover() }
+        else { super.mouseExited(with: event) }
+    }
+
+    private var canLoadHoverTitle: Bool {
+        window?.isVisible == true && window?.ignoresMouseEvents == false && !isHiddenOrHasHiddenAncestor
+    }
+
+    func endTitleHover() { clearHoverTitle() }
+
     // NSButton runs its own tracking loop inside mouseDown; refreshes can still land during it,
     // including after the pointer leaves and the highlight turns off.
     private(set) var isTracking = false
